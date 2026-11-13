@@ -71,7 +71,7 @@ impl IntoResponse for AppError {
 /// the app just sees SERVER_ERROR.
 impl From<sqlx::Error> for AppError {
     fn from(err: sqlx::Error) -> Self {
-        eprintln!("database error: {err}");
+        tracing::error!("database error: {err}");
         Self::Server
     }
 }

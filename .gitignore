@@ -1,2 +1,8 @@
 /target
 .env
+scripts
+tests
+log
+doc
+data
+migrations

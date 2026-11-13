@@ -1,38 +1,10 @@
-mod config;
-mod error;
-mod modules;
-mod state;
-
-use axum::{Json, Router, routing::get};
-use config::Config;
-use serde_json::{Value, json};
+use server_echopass::{app, config::Config, logging, state::AppState};
 use sqlx::PgPool;
-use state::AppState;
-use tower_http::trace::TraceLayer;
-
-async fn health() -> Json<Value> {
-    Json(json!({ "status": "ok" }))
-}
-
-/// All routes, nested under /api/v1, with one log line per request.
-fn app(state: AppState) -> Router {
-    let api = Router::new().route("/health", get(health));
-    Router::new()
-        .nest("/api/v1", api)
-        .layer(TraceLayer::new_for_http())
-        .with_state(state)
-}
 
 #[tokio::main]
 async fn main() {
     dotenvy::dotenv().ok();
-    // Log level comes from RUST_LOG, default is "info".
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info,tower_http=debug".into()),
-        )
-        .init();
+    logging::init();
 
     let config = Config::from_env();
 
