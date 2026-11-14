@@ -3,7 +3,7 @@
 use sqlx::PgPool;
 
 use super::{
-    models::{BusLine, Device, Route},
+    models::{BusLine, Device, DeviceRole, Route},
     repo, signature,
 };
 use crate::error::AppError;
@@ -16,6 +16,27 @@ pub async fn get_route(db: &PgPool, route_id: i32) -> Result<Route, AppError> {
 /// Line name and destination of a bus. None when the bus does not exist.
 pub async fn bus_line(db: &PgPool, bus_id: i32) -> Result<Option<BusLine>, AppError> {
     Ok(repo::find_route_of_bus(db, bus_id).await?.map(BusLine::from))
+}
+
+/// A device may only call for its own bus, and only the calls of its role: Node A (the beacon) sends
+/// telemetry, Node B (the camera) sends photos. Anything else is 403 `FORBIDDEN`. Pure.
+pub fn require_device(device: &Device, role: DeviceRole, url_bus_id: i32) -> Result<(), AppError> {
+    if device.role == role && device.bus_id == url_bus_id { Ok(()) } else { Err(AppError::Forbidden) }
+}
+
+/// The device says which route it is configured for. If that is not the planned route of the bus,
+/// someone reconfigured the bus: a warning is written in the log (the call still goes on).
+pub async fn warn_if_route_differs(db: &PgPool, bus_id: i32, reported_route_id: i32) -> Result<(), AppError> {
+    let planned = planned_route_id(db, bus_id).await?;
+    if planned != Some(reported_route_id) {
+        tracing::warn!(
+            bus_id,
+            planned_route_id = ?planned,
+            reported_route_id,
+            "bus reports a route different from the planned one"
+        );
+    }
+    Ok(())
 }
 
 /// The route a bus is planned to run (`buses.route_id`).

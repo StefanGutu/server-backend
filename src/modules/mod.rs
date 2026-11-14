@@ -3,6 +3,7 @@
 pub mod auth;
 pub mod charges;
 pub mod devices;
+pub mod frames;
 pub mod idempotency;
 pub mod rides;
 pub mod sightings;

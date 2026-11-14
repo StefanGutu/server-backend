@@ -11,7 +11,7 @@ use super::{
     models::{Begin, IdempotentRequest},
     repo,
 };
-use crate::error::AppError;
+use crate::{error::AppError, extract::required_header};
 
 /// The name of the header (server-api.md).
 const HEADER_NAME: &str = "Idempotency-Key";
@@ -34,13 +34,8 @@ pub fn request_hash(endpoint: &str, body: &[u8]) -> String {
 /// Builds the request from the call: the `Idempotency-Key` header is required (a missing one,
 /// or one that is not a uuid, is a 400), then the endpoint and the body identify the call.
 pub fn request_from_headers(headers: &HeaderMap, endpoint: &str, body: &[u8]) -> Result<IdempotentRequest, AppError> {
-    let header = headers
-        .get(HEADER_NAME)
-        .ok_or_else(|| AppError::Validation(format!("The {HEADER_NAME} header is required.")))?
-        .to_str()
-        .map_err(|_| AppError::Validation(format!("{HEADER_NAME} must be a uuid.")))?;
     Ok(IdempotentRequest {
-        key: parse_key(header)?,
+        key: parse_key(required_header(headers, HEADER_NAME)?)?,
         endpoint: endpoint.to_string(),
         request_hash: request_hash(endpoint, body),
     })

@@ -54,6 +54,15 @@ pub fn parse_json_body<T: DeserializeOwned>(body: &[u8]) -> Result<T, AppError> 
     serde_json::from_slice(body).map_err(|e| AppError::Validation(format!("Invalid body: {e}")))
 }
 
+/// A header that the call must have, as text. Missing, or not text: 400 `VALIDATION_ERROR` naming the header.
+/// (`header_str` is for the login headers and gives 401.)
+pub fn required_header<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str, AppError> {
+    let value = headers
+        .get(name)
+        .ok_or_else(|| AppError::Validation(format!("The {name} header is required.")))?;
+    value.to_str().map_err(|_| AppError::Validation(format!("The {name} header must be text.")))
+}
+
 /// Reads a header as text, or `AUTH_INVALID` if it is missing or not text.
 pub fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str, AppError> {
     headers

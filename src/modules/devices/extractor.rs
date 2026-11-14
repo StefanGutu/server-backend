@@ -1,6 +1,7 @@
 use axum::{
     body::Bytes,
     extract::{FromRequest, Request},
+    http::StatusCode,
 };
 
 use super::{models::Device, service};
@@ -22,9 +23,14 @@ impl FromRequest<AppState> for SignedRequest {
         let timestamp = header_str(req.headers(), "X-Timestamp")?.to_string();
         let signature = header_str(req.headers(), "X-Signature")?.to_string();
 
-        let body = Bytes::from_request(req, state)
-            .await
-            .map_err(|_| AppError::Validation("Cannot read the body.".to_string()))?;
+        let body = Bytes::from_request(req, state).await.map_err(|rejection| {
+            let message = if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {
+                "The body is too big."
+            } else {
+                "Cannot read the body."
+            };
+            AppError::Validation(message.to_string())
+        })?;
 
         let device = service::authenticate(&state.db, &device_id, &timestamp, &signature, &body).await?;
         Ok(Self { device, body })

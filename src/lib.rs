@@ -30,6 +30,7 @@ pub fn app(state: AppState) -> Router {
         .merge(modules::auth::routes::router())
         .merge(modules::charges::routes::router())
         .merge(modules::devices::routes::router())
+        .merge(modules::frames::routes::router())
         .merge(modules::rides::routes::router())
         .merge(modules::sightings::routes::router())
         .merge(modules::telemetry::routes::router())
