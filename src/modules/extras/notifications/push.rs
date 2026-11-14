@@ -51,7 +51,7 @@ impl Push {
             ),
             PushType::ChargeCancelled => (
                 "Charge cancelled",
-                "A charge was cancelled. The money is returned to your card.",
+                "A charge for your ride was cancelled. Open EchoPass to see your rides.",
             ),
         }
     }

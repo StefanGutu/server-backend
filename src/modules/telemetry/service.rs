@@ -74,6 +74,17 @@ pub fn max_distance_from_first_m(positions: &[(f64, f64)]) -> f64 {
         .fold(0.0, f64::max)
 }
 
+/// Positions kept for each bus: the newest 5000 (about 2 hours 45 minutes at one message every 2 seconds).
+/// The positions are read by the boarding decision (the last minutes), by the end of a ride (since the user was
+/// last heard, up to an hour), by the trip of a ride (the whole ride) and by reports (the last 5 minutes), so
+/// this must be more than the longest ride: with 1000 (33 minutes) a long ride would lose where it started.
+pub const MAX_POSITIONS_PER_BUS: i64 = 5000;
+
+/// Deletes the oldest positions beyond `MAX_POSITIONS_PER_BUS` for each bus (called by the background task).
+pub async fn delete_old_positions(db: &PgPool) -> Result<u64, AppError> {
+    Ok(repo::delete_beyond_newest(db, MAX_POSITIONS_PER_BUS).await?)
+}
+
 /// The GPS positions (lat, lon) of a bus received between two unix times, oldest first. Only messages with a
 /// GPS fix; `allow_sim`: also simulator positions (test mode only).
 pub async fn bus_positions(

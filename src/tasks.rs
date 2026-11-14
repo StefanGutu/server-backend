@@ -14,6 +14,7 @@ use crate::{
             reports,
             trips::{self, service::TripFacts},
         },
+        idempotency,
         rides::{
             self,
             models::{RideRef, RideStatus},
@@ -95,6 +96,17 @@ pub async fn run_once(db: &PgPool, allow_sim: bool) -> Result<(), AppError> {
     let forgotten = auth::service::delete_expired_refresh_tokens(db).await?;
     if forgotten > 0 {
         tracing::info!(forgotten, "expired refresh tokens deleted");
+    }
+    let old_positions = telemetry::service::delete_old_positions(db).await?;
+    if old_positions > 0 {
+        tracing::info!(
+            old_positions,
+            "old bus positions deleted: only the newest are kept for each bus"
+        );
+    }
+    let keys = idempotency::service::delete_old_keys(db).await?;
+    if keys > 0 {
+        tracing::info!(keys, "idempotency keys older than a day deleted");
     }
     let reports = reports::service::delete_expired(db).await?;
     if reports > 0 {

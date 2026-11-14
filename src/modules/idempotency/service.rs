@@ -70,6 +70,15 @@ pub async fn finish(
     Ok(repo::insert(db, user_id, request, response).await?)
 }
 
+/// How long a stored answer is kept: one day. A key only matters for the few minutes in which the phone may
+/// repeat a call after a network error; after a day it only fills the table (and keeps copies of rides and tickets).
+pub const KEY_LIFETIME_SECS: i64 = 24 * 60 * 60;
+
+/// Deletes the stored answers older than `KEY_LIFETIME_SECS` (called by the background task). Returns how many.
+pub async fn delete_old_keys(db: &PgPool) -> Result<u64, AppError> {
+    Ok(repo::delete_older_than(db, KEY_LIFETIME_SECS).await?)
+}
+
 /// One operation at a time for a thing that is paid for (a ride, a pass): the second request waits
 /// until the first has its answer, then sees what the first did. Without it two requests at the same
 /// moment could both pay. `name` is for example `ride:<id>`. Give what it returns to `unlock`.

@@ -19,9 +19,17 @@ impl FromRequest<AppState> for SignedRequest {
 
     async fn from_request(req: Request, state: &AppState) -> Result<Self, AppError> {
         // Copy the headers first: reading the body below consumes the request.
-        let device_id = header_str(req.headers(), "X-Device-Id")?.to_string();
-        let timestamp = header_str(req.headers(), "X-Timestamp")?.to_string();
-        let signature = header_str(req.headers(), "X-Signature")?.to_string();
+        let headers = req.headers().clone();
+        let header = |name: &str| {
+            header_str(&headers, name)
+                .map(str::to_string)
+                .inspect_err(|_| {
+                    tracing::warn!("device refused: the header {name} is missing or not text");
+                })
+        };
+        let device_id = header("X-Device-Id")?;
+        let timestamp = header("X-Timestamp")?;
+        let signature = header("X-Signature")?;
 
         let body = Bytes::from_request(req, state).await.map_err(|rejection| {
             let message = if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE {

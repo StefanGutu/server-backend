@@ -631,18 +631,10 @@ async fn confirm_locked(
     .await?;
 
     if !repo::confirm_session(db, session.id, bus_id, input.passengers).await? {
-        // Another request changed the ride first (for example it expired): do not keep this charge, and give
-        // the money back (a failed refund is logged loudly: nobody else will notice).
+        // Another request changed the ride first (for example it expired): do not keep this charge. There is no
+        // refund in this server (a bus ride is not worth one: R48), so the card was charged for nothing: say so loudly.
         charges::service::cancel_charge(db, charge.id).await?;
-        if let Some(card) = &card
-            && let Err(e) = pay
-                .provider
-                .refund(&card.provider_method_id, amount_bani)
-                .await
-        {
-            tracing::error!(session_id = %session.id, charge_id = %charge.id, amount_bani, "REFUND FAILED, the user was charged for nothing: {e}");
-        }
-        tracing::warn!(session_id = %session.id, charge_id = %charge.id, "ride changed while paying: charge cancelled");
+        tracing::warn!(session_id = %session.id, charge_id = %charge.id, "ride changed while paying: charge cancelled, and NOT refunded (no refund is built)");
         notifications::service::send_push(
             db,
             pay.push,

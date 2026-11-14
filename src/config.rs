@@ -62,6 +62,10 @@ fn number_setting<T: std::str::FromStr>(name: &str, default: T) -> T {
 /// A short secret can be guessed, and then anyone can make tokens: refuse to start with one.
 fn jwt_secret(secret: String) -> String {
     assert!(
+        !secret.starts_with("change-me"),
+        "JWT_SECRET is still the example value from .env.example: everyone can read it. Make one with: openssl rand -hex 32"
+    );
+    assert!(
         secret.len() >= MIN_SECRET_LEN,
         "JWT_SECRET must have at least {MIN_SECRET_LEN} characters (make one with: openssl rand -hex 32)"
     );

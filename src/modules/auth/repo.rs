@@ -224,6 +224,23 @@ pub async fn rotate_refresh_token(
     Ok(true)
 }
 
+/// True when the device still has a refresh token that works (not used or revoked, not expired). After a
+/// logout or after a revoked device it has none.
+pub async fn device_has_working_token(
+    db: &PgPool,
+    user_id: Uuid,
+    device_id: &str,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM refresh_tokens
+         WHERE user_id = $1 AND device_id = $2 AND revoked_at IS NULL AND expires_at > now())",
+    )
+    .bind(user_id)
+    .bind(device_id)
+    .fetch_one(db)
+    .await
+}
+
 /// Revokes every refresh token of this user on this device that still works. Returns how many.
 pub async fn revoke_device_tokens(
     db: &PgPool,

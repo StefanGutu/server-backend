@@ -125,6 +125,15 @@ pub fn refresh_token_state(row: &RefreshTokenRow, now: DateTime<Utc>) -> Refresh
     }
 }
 
+/// How long after it was used a refresh token is still accepted once more (seconds). The answer of a refresh
+/// may be lost on the way (bad network on a bus): the app then sends the old token again, which is not theft.
+pub const REFRESH_GRACE_SECS: i64 = 30;
+
+/// A used token came back `used_at`; is it still inside the grace time at `now`? Pure.
+pub fn within_refresh_grace(used_at: DateTime<Utc>, now: DateTime<Utc>) -> bool {
+    now - used_at <= Duration::seconds(REFRESH_GRACE_SECS)
+}
+
 /// A refresh token that was already used came back: the app never does that, so the token was
 /// probably copied. Every login of this user on this device stops working.
 async fn revoke_device(db: &PgPool, row: &RefreshTokenRow) -> Result<(), AppError> {
@@ -151,8 +160,7 @@ pub async fn refresh(
         RefreshTokenState::Usable => {}
         RefreshTokenState::Expired => return Err(AppError::AuthInvalid),
         RefreshTokenState::Revoked => {
-            revoke_device(db, &row).await?;
-            return Err(AppError::AuthInvalid);
+            return second_use(db, jwt_secret, &row, row.revoked_at.unwrap_or(now), now).await;
         }
     }
 
@@ -166,10 +174,40 @@ pub async fn refresh(
     };
     if !repo::rotate_refresh_token(db, row.id, &next_token).await? {
         // Another request used the same token between our read and our write.
-        revoke_device(db, &row).await?;
-        return Err(AppError::AuthInvalid);
+        return second_use(db, jwt_secret, &row, now, now).await;
     }
     Ok(reply)
+}
+
+/// A refresh token that was already used (`used_at`) came back. Two cases:
+/// - **Lost answer** (R35): it was used less than `REFRESH_GRACE_SECS` ago and the device still has a working
+///   token (so it was an exchange, not a logout or a revoked device): the phone never got the new tokens, so it
+///   gets another new pair. The pair sent before stays valid until used.
+/// - **Copied token**: anything else. `AUTH_INVALID`, and every login of the device is revoked.
+async fn second_use(
+    db: &PgPool,
+    jwt_secret: &str,
+    row: &RefreshTokenRow,
+    used_at: DateTime<Utc>,
+    now: DateTime<Utc>,
+) -> Result<TokenReply, AppError> {
+    if within_refresh_grace(used_at, now)
+        && repo::device_has_working_token(db, row.user_id, &row.device_id).await?
+    {
+        let (reply, token_hash, expires_at) = new_tokens(jwt_secret, row.user_id, now)?;
+        let next_token = NewRefreshToken {
+            id: Uuid::now_v7(),
+            user_id: row.user_id,
+            device_id: &row.device_id,
+            token_hash: &token_hash,
+            expires_at,
+        };
+        repo::insert_refresh_token(db, &next_token).await?;
+        tracing::warn!(user_id = %row.user_id, "a used refresh token came back within {REFRESH_GRACE_SECS} s: taken as a lost answer, new tokens sent again");
+        return Ok(reply);
+    }
+    revoke_device(db, row).await?;
+    Err(AppError::AuthInvalid)
 }
 
 /// Background clean-up: forgets the refresh tokens whose time has passed. Returns how many.

@@ -77,16 +77,42 @@ pub async fn authenticate(
     signature_hex: &str,
     body: &[u8],
 ) -> Result<Device, AppError> {
-    let device = repo::find_device(db, device_id)
-        .await?
-        .ok_or(AppError::AuthInvalid)?;
+    // Every refusal says why in the log (never the secret): a device that gets a 401 can be told what to fix.
+    let Some(device) = repo::find_device(db, device_id).await? else {
+        tracing::warn!(
+            device_id,
+            "device refused: this device id is not in the table `devices`"
+        );
+        return Err(AppError::AuthInvalid);
+    };
 
     if !signature::verify_signature(&device.secret, timestamp, device_id, body, signature_hex) {
+        tracing::warn!(
+            device_id,
+            timestamp,
+            body_bytes = body.len(),
+            signature_chars = signature_hex.len(),
+            "device refused: the signature does not match (wrong secret, or the device signed other bytes than the body it sent)"
+        );
         return Err(AppError::AuthInvalid);
     }
 
-    let timestamp: i64 = timestamp.parse().map_err(|_| AppError::AuthInvalid)?;
-    if !signature::timestamp_ok(timestamp, chrono::Utc::now().timestamp()) {
+    let Ok(timestamp_secs) = timestamp.parse::<i64>() else {
+        tracing::warn!(
+            device_id,
+            timestamp,
+            "device refused: X-Timestamp is not a number"
+        );
+        return Err(AppError::AuthInvalid);
+    };
+    let now = chrono::Utc::now().timestamp();
+    if !signature::timestamp_ok(timestamp_secs, now) {
+        tracing::warn!(
+            device_id,
+            timestamp_secs,
+            server_time = now,
+            "device refused: X-Timestamp is more than 5 minutes from the server clock"
+        );
         return Err(AppError::AuthInvalid);
     }
     Ok(device)

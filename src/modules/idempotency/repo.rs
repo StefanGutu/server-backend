@@ -41,6 +41,17 @@ pub async fn insert(
     Ok(())
 }
 
+/// Deletes the keys older than `max_age_secs`. Returns how many.
+pub async fn delete_older_than(db: &PgPool, max_age_secs: i64) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query(
+        "DELETE FROM idempotency_keys WHERE created_at < now() - make_interval(secs => $1)",
+    )
+    .bind(max_age_secs as f64)
+    .execute(db)
+    .await?;
+    Ok(result.rows_affected())
+}
+
 /// Takes a lock with this name and waits if another request holds it. The lock lives as long as the
 /// returned transaction (`pg_advisory_xact_lock`): it is released when the transaction ends, and also
 /// when the transaction is dropped (the database rolls it back and the connection goes back to the pool
