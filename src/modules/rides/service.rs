@@ -14,7 +14,7 @@ use super::{
 use crate::{
     error::AppError,
     modules::{
-        auth::models::User,
+        auth::{self, models::User},
         charges::{
             self,
             models::{Charge, ChargeStatus, NewCharge},
@@ -401,6 +401,7 @@ pub async fn confirm(
     test_mode: bool,
     idempotency: &IdempotentRequest,
 ) -> Result<RideReply, AppError> {
+    auth::service::require_account(user)?;
     let name = format!("ride:{session_id}");
     let lock = idempotency::service::lock(db, &name).await?;
     let result = confirm_with_key(db, provider, user, session_id, input, test_mode, idempotency).await;

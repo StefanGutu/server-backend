@@ -223,6 +223,7 @@ pub async fn renew_pass(
     input: &RenewInput,
     request: &IdempotentRequest,
 ) -> Result<Value, AppError> {
+    auth::service::require_account(user)?;
     let name = format!("pass:{pass_id}");
     let lock = idempotency::service::lock(db, &name).await?;
     let result = renew_with_key(db, provider, user, pass_id, input, request).await;

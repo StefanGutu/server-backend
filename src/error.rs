@@ -11,6 +11,10 @@ use serde_json::json;
 pub enum AppError {
     #[error("Missing, invalid or expired token.")]
     AuthInvalid,
+    /// A proof of identity that is not accepted: a wrong or expired phone code, an ID token that
+    /// does not check out. Same status and code as `AuthInvalid` (a critical failure), with its own message.
+    #[error("{0}")]
+    AuthRejected(String),
     #[error("An account is required to pay.")]
     AccountRequired,
     #[error("You are not allowed to do this.")]
@@ -48,7 +52,7 @@ impl AppError {
     /// The one place that maps each error to its HTTP status and code.
     fn status_and_code(&self) -> (StatusCode, &'static str) {
         match self {
-            Self::AuthInvalid => (StatusCode::UNAUTHORIZED, "AUTH_INVALID"),
+            Self::AuthInvalid | Self::AuthRejected(_) => (StatusCode::UNAUTHORIZED, "AUTH_INVALID"),
             Self::AccountRequired => (StatusCode::FORBIDDEN, "ACCOUNT_REQUIRED"),
             Self::Forbidden => (StatusCode::FORBIDDEN, "FORBIDDEN"),
             Self::NotFound => (StatusCode::NOT_FOUND, "NOT_FOUND"),

@@ -4,7 +4,7 @@ use server_echopass::{
     app,
     config::Config,
     logging,
-    modules::{charges, wallet::provider::FakeProvider},
+    modules::{auth::id_token::IdTokenVerifier, charges, wallet::provider::FakeProvider},
     state::AppState,
     tasks,
 };
@@ -33,13 +33,14 @@ async fn main() {
         .expect("cannot bind the port");
     tracing::info!("server running on port {}", config.port);
     if config.test_mode {
-        tracing::warn!("TEST_MODE is on: X-User-Id is accepted instead of tokens");
+        tracing::warn!("TEST_MODE is on: X-User-Id is accepted when there is no Authorization header");
     }
 
     // Expires and ends rides in the background.
     tokio::spawn(tasks::run(db.clone(), config.test_mode));
 
-    let state = AppState { db, config, payments: Arc::new(FakeProvider) };
+    let id_tokens = IdTokenVerifier::for_mode(config.test_mode);
+    let state = AppState { db, config, payments: Arc::new(FakeProvider), id_tokens };
     axum::serve(listener, app(state))
         .await
         .unwrap();

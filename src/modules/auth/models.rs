@@ -92,20 +92,153 @@ pub struct Me {
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
-    /// Linked phone/google/apple identities. Always empty until step 26.
-    pub identities: Vec<String>,
+    /// Linked phone / Google / Apple identities.
+    pub identities: Vec<Identity>,
     pub settings: Settings,
 }
 
-impl From<User> for Me {
-    fn from(user: User) -> Self {
+impl Me {
+    /// The user as the app sees them, with the identities that are linked to them.
+    pub fn new(user: User, identities: Vec<Identity>) -> Self {
         Self {
             id: user.id,
             tier: user.tier,
             name: user.name,
             email: user.email,
-            identities: Vec::new(),
+            identities,
             settings: user.settings.0,
         }
     }
+}
+
+impl From<User> for Me {
+    /// A user with no identity linked.
+    fn from(user: User) -> Self {
+        Self::new(user, Vec::new())
+    }
+}
+
+/// Where an identity comes from. Stored as text in `auth_identities.provider`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[serde(rename_all = "lowercase")]
+#[sqlx(type_name = "text", rename_all = "lowercase")]
+pub enum Provider {
+    Google,
+    Apple,
+    Phone,
+}
+
+/// A linked identity, as the app sees it in `GET /me`: the provider and who it is there
+/// (for a phone: the number).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, FromRow)]
+pub struct Identity {
+    pub provider: Provider,
+    pub subject: String,
+}
+
+/// Body of POST /auth/otp/start (server-api.md): `{ "phone" }`.
+#[derive(Debug, Deserialize)]
+pub struct OtpStartInput {
+    pub phone: String,
+}
+
+/// Body of POST /auth/link (server-api.md): `{ provider, idToken | phone, code }`.
+/// `idToken` is for Google and Apple (step 27).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkInput {
+    pub provider: Provider,
+    pub id_token: Option<String>,
+    pub phone: Option<String>,
+    pub code: Option<String>,
+}
+
+/// Body of POST /auth/signin (server-api.md): `{ provider, idToken | phone, code, deviceId }`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SigninInput {
+    pub provider: Provider,
+    pub id_token: Option<String>,
+    pub phone: Option<String>,
+    pub code: Option<String>,
+    pub device_id: String,
+}
+
+/// What POST /auth/link and POST /auth/signin return (server-api.md):
+/// `{ "userId", "tier", "accessToken", "refreshToken" }`. Not the same four fields as
+/// `TokenReply`: there is a `tier` and no `expiresIn`.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginReply {
+    pub user_id: Uuid,
+    pub tier: Tier,
+    pub access_token: String,
+    pub refresh_token: String,
+}
+
+/// Body of POST /auth/anonymous (server-api.md): `{ "deviceId" }`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnonymousInput {
+    pub device_id: String,
+}
+
+/// Body of POST /auth/refresh (server-api.md): `{ "refreshToken" }`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefreshInput {
+    pub refresh_token: String,
+}
+
+/// What POST /auth/anonymous and POST /auth/refresh return (server-api.md):
+/// `{ "userId", "accessToken", "refreshToken", "expiresIn" }`. `expiresIn` is the life of the
+/// access token in seconds.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenReply {
+    pub user_id: Uuid,
+    pub access_token: String,
+    pub refresh_token: String,
+    pub expires_in: i64,
+}
+
+/// A row of the `refresh_tokens` table, without the hash (it is only used to find the row).
+#[derive(Debug, FromRow)]
+pub struct RefreshTokenRow {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub device_id: String,
+    pub expires_at: DateTime<Utc>,
+    pub revoked_at: Option<DateTime<Utc>>,
+}
+
+/// A refresh token to store.
+pub struct NewRefreshToken<'a> {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub device_id: &'a str,
+    pub token_hash: &'a str,
+    pub expires_at: DateTime<Utc>,
+}
+
+/// What a stored refresh token is good for at this moment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefreshTokenState {
+    /// It works: it can be exchanged for new tokens, once.
+    Usable,
+    /// It was already used (or revoked). Sending it again is a sign that it was copied.
+    Revoked,
+    /// Its time has passed.
+    Expired,
+}
+
+/// What happened when an identity was linked to a user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Linked {
+    /// New: the identity now belongs to the user (who is an `account` from now on).
+    New,
+    /// It already belonged to this user (the same call again).
+    AlreadyTheirs,
+    /// It belongs to another user: 409 `IDENTITY_IN_USE`.
+    InUse,
 }

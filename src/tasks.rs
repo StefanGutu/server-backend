@@ -9,7 +9,7 @@ use sqlx::PgPool;
 use crate::{
     error::AppError,
     modules::{
-        charges,
+        auth, charges,
         rides::{self, models::RideStatus},
         sightings, telemetry,
     },
@@ -31,7 +31,7 @@ pub async fn run(db: PgPool, allow_sim: bool) {
 }
 
 /// One pass: reject rides nobody answered, reject `pending` rides whose user is gone, end rides whose
-/// user is gone while the bus drives on.
+/// user is gone while the bus drives on, forget the refresh tokens and the phone codes whose time has passed.
 pub async fn run_once(db: &PgPool, allow_sim: bool) -> Result<(), AppError> {
     let rejected = rides::service::reject_unanswered(db).await?;
     if rejected > 0 {
@@ -67,6 +67,18 @@ pub async fn run_once(db: &PgPool, allow_sim: bool) -> Result<(), AppError> {
                 session_id = %ride.id, bus_id = ride.bus_id, charges_completed = completed,
                 "ride ended: user no longer heard, bus kept moving"
             );
+        }
+    }
+
+    let forgotten = auth::service::delete_expired_refresh_tokens(db).await?;
+    if forgotten > 0 {
+        tracing::info!(forgotten, "expired refresh tokens deleted");
+    }
+    #[cfg(feature = "phone-login")]
+    {
+        let codes = auth::service::delete_expired_otp_codes(db).await?;
+        if codes > 0 {
+            tracing::info!(codes, "expired phone codes deleted");
         }
     }
     Ok(())
