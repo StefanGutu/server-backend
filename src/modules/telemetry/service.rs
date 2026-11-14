@@ -2,7 +2,10 @@
 
 use sqlx::PgPool;
 
-use super::{models::Telemetry, repo};
+use super::{
+    models::{Fix, Telemetry},
+    repo,
+};
 use crate::{
     error::AppError,
     modules::devices::{
@@ -95,6 +98,30 @@ pub async fn bus_positions(
     allow_sim: bool,
 ) -> Result<Vec<(f64, f64)>, AppError> {
     Ok(repo::fix_positions(db, bus_id, from_epoch, to_epoch, allow_sim).await?)
+}
+
+/// The positions of a bus of the last `within_secs` seconds, **newest first** (at most `limit`), with time, speed and
+/// whether they are simulated. `allow_sim`: also simulator positions (test mode only). `now` is unix seconds.
+pub async fn recent_fixes(
+    db: &PgPool,
+    bus_id: i32,
+    now: i64,
+    within_secs: i64,
+    allow_sim: bool,
+    limit: i64,
+) -> Result<Vec<Fix>, AppError> {
+    Ok(repo::recent_fixes(db, bus_id, now - within_secs, allow_sim, limit).await?)
+}
+
+/// Where the bus was at the first position it sent from `since_epoch` on (lat, lon), or None. `allow_sim`: also simulator
+/// positions (test mode only).
+pub async fn first_position(
+    db: &PgPool,
+    bus_id: i32,
+    since_epoch: i64,
+    allow_sim: bool,
+) -> Result<Option<(f64, f64)>, AppError> {
+    Ok(repo::first_position(db, bus_id, since_epoch, allow_sim).await?)
 }
 
 /// How many metres a bus moved between two unix times (by the time the server received

@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, types::Json};
 use uuid::Uuid;
 
+use super::progress::Progress;
 use crate::{extract::utc_seconds, modules::charges::models::Charge};
 
 /// The `status` of a ride (server-api.md section 2). Stored as text in `ride_sessions.status`
@@ -67,6 +68,8 @@ pub struct RideSession {
     pub client_secret: Option<String>,
     pub expires_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// When the ride began (the first sighting, or "I am on the bus"): the bus's first position after it is where the user got on.
+    pub created_at: DateTime<Utc>,
 }
 
 /// The bus of a ride, as the app shows it.
@@ -105,6 +108,8 @@ pub struct Ride {
     pub payment: Option<Payment>,
     /// The charge of the ride: shown when the ride is `confirmed` or `ended`, otherwise `null`.
     pub charge: Option<Charge>,
+    /// Where the bus is and the next stop: only while the ride is `confirmed`, otherwise `null` (`progress.rs`).
+    pub progress: Option<Progress>,
 }
 
 /// What the service answers for GET /rides/current.

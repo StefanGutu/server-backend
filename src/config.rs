@@ -23,6 +23,9 @@ pub struct Config {
     /// The secret of the display calls (`DISPLAY_TOKEN`, at least 32 characters): who sends it as
     /// `Authorization: Bearer ...` may read the buses, positions, photos and so on. None = those calls are off.
     pub display_token: Option<String>,
+    /// Where the model that counts the people in a photo runs (`HEADCOUNT_URL`, for example
+    /// `http://127.0.0.1:8000`, no trailing slash). None = counting is off and the server works as before.
+    pub headcount_url: Option<String>,
 }
 
 /// The shortest `DISPLAY_TOKEN` the server starts with.
@@ -52,8 +55,25 @@ impl Config {
             rate_limit_max: number_setting("RATE_LIMIT_AUTH_MAX", 20),
             rate_limit_window_secs: number_setting("RATE_LIMIT_AUTH_WINDOW_SECS", 60),
             display_token: display_token(std::env::var("DISPLAY_TOKEN").ok()),
+            headcount_url: parse_headcount_url(std::env::var("HEADCOUNT_URL").ok())
+                .unwrap_or_else(|message| panic!("{message}")),
         }
     }
+}
+
+/// `HEADCOUNT_URL`: empty or missing means counting is off. Otherwise it must be an `http://` or `https://` address;
+/// a trailing `/` is dropped so `{url}/count` is always right. Anything else is an error message (the server
+/// refuses to start with it, better at start than at the first photo). Pure.
+pub fn parse_headcount_url(raw: Option<String>) -> Result<Option<String>, String> {
+    let Some(raw) = raw.map(|u| u.trim().to_string()).filter(|u| !u.is_empty()) else {
+        return Ok(None);
+    };
+    if !(raw.starts_with("http://") || raw.starts_with("https://")) {
+        return Err(format!(
+            "HEADCOUNT_URL must start with http:// or https:// (for example http://127.0.0.1:8000), not {raw}"
+        ));
+    }
+    Ok(Some(raw.trim_end_matches('/').to_string()))
 }
 
 /// `DISPLAY_TOKEN`: empty or missing means the display calls are off. A short one is refused at start: it can be guessed.

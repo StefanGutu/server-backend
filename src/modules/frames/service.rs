@@ -21,7 +21,7 @@ use crate::{
 pub const MAX_FRAME_BYTES: usize = 2 * 1024 * 1024;
 
 /// What the camera is told after each photo: wait 3 seconds. Must be 1000 to 60000 (server.md).
-pub const NEXT_CAPTURE_MS: u32 = 3000;
+pub const NEXT_CAPTURE_MS: u32 = 5000;
 
 /// The folder the photos are saved in, next to the code (`photos/` is not in git). One folder per bus.
 pub const PHOTOS_DIR: &str = "photos";

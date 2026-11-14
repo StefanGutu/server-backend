@@ -13,7 +13,10 @@ use super::{
 };
 use crate::{
     error::AppError,
-    modules::frames::service::{NEXT_CAPTURE_MS, frame_path},
+    modules::{
+        frames::service::{NEXT_CAPTURE_MS, frame_path},
+        headcount,
+    },
 };
 
 /// How many items a list sends when `limit` is not given, and the most it sends.
@@ -148,6 +151,16 @@ pub async fn latest_frame(db: &PgPool, bus_id: i32) -> Result<Vec<u8>, AppError>
         tracing::warn!(path, "the file of the newest photo cannot be read: {e}");
         AppError::NotFound
     })
+}
+
+/// How many people are in the bus, how many paid and how many have no ticket. 404 `VEHICLE_UNKNOWN` for a bus that does
+/// not exist.
+pub async fn bus_headcount(
+    db: &PgPool,
+    bus_id: i32,
+) -> Result<headcount::models::BusHeadcount, AppError> {
+    require_bus(db, bus_id).await?;
+    headcount::service::bus_headcount(db, bus_id, Utc::now()).await
 }
 
 pub async fn capture_interval(db: &PgPool, bus_id: i32) -> Result<CaptureInterval, AppError> {

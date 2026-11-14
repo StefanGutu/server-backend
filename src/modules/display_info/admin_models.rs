@@ -58,10 +58,43 @@ pub struct RidesQuery {
     pub offset: Option<i64>,
 }
 
+/// What a charge is for: a bus `ride`, or a `pass_renewal` (a pass was bought: no ride). It is the `kind` of a charge in
+/// the display's list and the filter `kind=` of that list, so one rule serves both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChargeKind {
+    Ride,
+    PassRenewal,
+}
+
+impl ChargeKind {
+    /// The kind of a charge: a charge with a ride is a `ride`, one without is a `pass_renewal`. Pure.
+    /// (The filter in `admin_repo::list_charges` writes the same rule in SQL: `session_id IS NOT NULL` is a ride.)
+    pub fn of(session_id: Option<Uuid>) -> Self {
+        if session_id.is_some() {
+            Self::Ride
+        } else {
+            Self::PassRenewal
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ride => "ride",
+            Self::PassRenewal => "pass_renewal",
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ChargesQuery {
     pub user_id: Option<Uuid>,
     pub status: Option<ChargeStatus>,
+    /// Only the charges that started from this time on / up to this time (`2026-11-14T14:00:00Z`), both included.
+    pub from: Option<DateTime<Utc>>,
+    pub to: Option<DateTime<Utc>>,
+    /// Only the rides, or only the pass purchases. Another value is a 400.
+    pub kind: Option<ChargeKind>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
 }
@@ -339,7 +372,7 @@ pub struct ChargeAdminItem {
     pub user_id: Uuid,
     pub session_id: Option<Uuid>,
     /// `ride`, or `pass_renewal` (a pass was bought: no ride).
-    pub kind: &'static str,
+    pub kind: ChargeKind,
     pub line: String,
     pub destination: Option<String>,
     #[serde(serialize_with = "ron_from_bani")]

@@ -6,6 +6,7 @@ pub mod devices;
 pub mod display_info;
 pub mod extras;
 pub mod frames;
+pub mod headcount;
 pub mod idempotency;
 pub mod rides;
 pub mod sightings;

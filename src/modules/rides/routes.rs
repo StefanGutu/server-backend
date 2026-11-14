@@ -42,7 +42,7 @@ async fn get_current_ride(
     // The header is optional: a missing one just means "send the ride".
     let if_none_match = header_str(&headers, "If-None-Match").ok();
     Ok(ride_response(
-        service::current_ride(&state.db, user.id, if_none_match).await?,
+        service::current_ride(&state.db, user.id, if_none_match, state.config.test_mode).await?,
     ))
 }
 
@@ -77,8 +77,10 @@ async fn post_decline(
     CurrentUser(user): CurrentUser,
     ApiPath(session_id): ApiPath<Uuid>,
 ) -> Result<Response, AppError> {
-    let reply =
-        run_to_the_end(async move { service::decline(&state.db, &user, session_id).await }).await?;
+    let reply = run_to_the_end(async move {
+        service::decline(&state.db, &user, session_id, state.config.test_mode).await
+    })
+    .await?;
     Ok(ride_response(reply))
 }
 

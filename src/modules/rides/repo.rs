@@ -11,7 +11,7 @@ pub async fn find_current_session(
 ) -> Result<Option<RideSession>, sqlx::Error> {
     sqlx::query_as(
         "SELECT id, user_id, bus_id, status, version, candidates, passengers,
-                payment_reason, client_secret, expires_at, updated_at
+                payment_reason, client_secret, expires_at, updated_at, created_at
          FROM ride_sessions WHERE user_id = $1 ORDER BY updated_at DESC LIMIT 1",
     )
     .bind(user_id)
@@ -106,6 +106,33 @@ pub async fn find_by_status(db: &PgPool, status: RideStatus) -> Result<Vec<RideR
         .await
 }
 
+/// The newest ride of a user, when it was rejected more than `secs` seconds ago (and less than an hour ago).
+pub async fn find_rejected_older_than(db: &PgPool, secs: i64) -> Result<Vec<RideRef>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT r.id, r.user_id, r.bus_id FROM ride_sessions r
+         WHERE r.status = $1
+           AND r.updated_at < now() - make_interval(secs => $2)
+           AND r.updated_at > now() - interval '1 hour'
+           AND NOT EXISTS (SELECT 1 FROM ride_sessions n WHERE n.user_id = r.user_id AND n.created_at > r.created_at)",
+    )
+    .bind(RideStatus::Rejected)
+    .bind(secs as f64)
+    .fetch_all(db)
+    .await
+}
+
+/// The `pending` rides created more than `secs` seconds ago.
+pub async fn find_pending_older_than(db: &PgPool, secs: i64) -> Result<Vec<RideRef>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT id, user_id, bus_id FROM ride_sessions
+         WHERE status = $1 AND created_at < now() - make_interval(secs => $2)",
+    )
+    .bind(RideStatus::Pending)
+    .bind(secs as f64)
+    .fetch_all(db)
+    .await
+}
+
 /// Moves a ride from one status to another. Only changes a ride that is still in `from` (another
 /// request may have changed it meanwhile). Raises `version` and `updated_at` so the ETag changes.
 /// Returns false if the ride was not in `from`.
@@ -137,7 +164,7 @@ pub async fn find_session(
 ) -> Result<Option<RideSession>, sqlx::Error> {
     sqlx::query_as(
         "SELECT id, user_id, bus_id, status, version, candidates, passengers,
-                payment_reason, client_secret, expires_at, updated_at
+                payment_reason, client_secret, expires_at, updated_at, created_at
          FROM ride_sessions WHERE id = $1 AND user_id = $2",
     )
     .bind(session_id)

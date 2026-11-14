@@ -2,10 +2,11 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::admin_models::{
-    BusRoute, ChargeAdminRow, Identity, PassAdminRow, PushDeviceInfo, ReportAdminRow, RideRow,
-    RideSighting, SightingInfo, StatusChange, TokenRow, TripAdminItem, UserRow, VerificationInfo,
+    BusRoute, ChargeAdminRow, ChargeKind, ChargesQuery, Identity, PassAdminRow, PushDeviceInfo,
+    ReportAdminRow, RideRow, RideSighting, SightingInfo, StatusChange, TokenRow, TripAdminItem,
+    UserRow, VerificationInfo,
 };
-use crate::modules::{charges::models::ChargeStatus, rides::models::RideStatus};
+use crate::modules::rides::models::RideStatus;
 
 /// The columns of a `UserRow`, with the counts and the open ride.
 macro_rules! user_select {
@@ -162,8 +163,7 @@ pub async fn ride_sightings(db: &PgPool, row: &RideRow) -> Result<Vec<RideSighti
 
 pub async fn list_charges(
     db: &PgPool,
-    user_id: Option<Uuid>,
-    status: Option<ChargeStatus>,
+    filter: &ChargesQuery,
     limit: i64,
     offset: i64,
 ) -> Result<Vec<ChargeAdminRow>, sqlx::Error> {
@@ -174,10 +174,15 @@ pub async fn list_charges(
                 c.pass_product_id, c.started_at, c.ended_at, c.qr_token
          FROM charges c
          WHERE ($1::uuid IS NULL OR c.user_id = $1) AND ($2::text IS NULL OR c.status = $2)
-         ORDER BY c.started_at DESC, c.id LIMIT $3 OFFSET $4",
+           AND ($3::timestamptz IS NULL OR c.started_at >= $3) AND ($4::timestamptz IS NULL OR c.started_at <= $4)
+           AND ($5::text IS NULL OR (c.session_id IS NOT NULL) = ($5 = 'ride'))
+         ORDER BY c.started_at DESC, c.id LIMIT $6 OFFSET $7",
     )
-    .bind(user_id)
-    .bind(status)
+    .bind(filter.user_id)
+    .bind(filter.status)
+    .bind(filter.from)
+    .bind(filter.to)
+    .bind(filter.kind.map(ChargeKind::as_str))
     .bind(limit)
     .bind(offset)
     .fetch_all(db)

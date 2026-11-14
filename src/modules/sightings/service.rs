@@ -148,10 +148,11 @@ pub async fn manual_ride(
     db: &PgPool,
     push: &PushSender,
     user_id: Uuid,
+    allow_sim: bool,
 ) -> Result<RideReply, AppError> {
     let since_slot = chrono::Utc::now().timestamp() / SLOT_SECS - MAX_SLOTS_OLD;
     let heard = repo::recent_bus_ids(db, user_id, since_slot).await?;
-    rides::service::start_manual_ride(db, push, user_id, &heard).await
+    rides::service::start_manual_ride(db, push, user_id, &heard, allow_sim).await
 }
 
 /// The time the user was heard near this bus in their latest run of slots in a row: from the start of the first
@@ -198,7 +199,7 @@ pub fn runs_by_bus(heard: &[(i32, i64)]) -> Vec<BusEvidence> {
 
 /// What the user heard lately, with how far each bus moved while they heard it.
 /// Only runs long enough to count get the (more expensive) movement lookup.
-async fn gather_evidence(
+pub async fn gather_evidence(
     db: &PgPool,
     user_id: Uuid,
     allow_sim: bool,

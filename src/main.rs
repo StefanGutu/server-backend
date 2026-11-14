@@ -47,11 +47,21 @@ async fn main() {
         );
     }
 
-    // Expires and ends rides in the background.
-    tokio::spawn(tasks::run(db.clone(), config.test_mode));
-
     let id_tokens = IdTokenVerifier::for_mode(config.test_mode);
     let push = PushSender::from_config(&config);
+    // Expires and ends rides in the background, and asks pending rides to pay once they are 10 s old.
+    // Counts the people in the photos, only when the model's address is set.
+    match &config.headcount_url {
+        Some(url) => {
+            tracing::info!(url, "counting the people in the photos is on");
+            tokio::spawn(tasks::run_headcount(db.clone(), url.clone()));
+        }
+        None => {
+            tracing::info!("HEADCOUNT_URL is not set: the people in the photos are not counted")
+        }
+    }
+
+    tokio::spawn(tasks::run(db.clone(), push.clone(), config.test_mode));
     let rate_limiter = Arc::new(RateLimiter::new(
         config.rate_limit_max,
         Duration::from_secs(config.rate_limit_window_secs),

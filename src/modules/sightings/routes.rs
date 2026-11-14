@@ -44,7 +44,7 @@ async fn post_manual_ride(
     CurrentUser(user): CurrentUser,
 ) -> Result<Response, AppError> {
     Ok(ride_response(
-        service::manual_ride(&state.db, &state.push, user.id).await?,
+        service::manual_ride(&state.db, &state.push, user.id, state.config.test_mode).await?,
     ))
 }
 

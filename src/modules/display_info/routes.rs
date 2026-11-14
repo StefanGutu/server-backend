@@ -18,7 +18,10 @@ use super::{
 use crate::{
     error::AppError,
     extract::{ApiPath, ApiQuery},
-    modules::wallet::{self, models::PassProduct},
+    modules::{
+        headcount::models::BusHeadcount,
+        wallet::{self, models::PassProduct},
+    },
     state::AppState,
 };
 
@@ -107,6 +110,15 @@ async fn get_capture_interval(
     Ok(Json(service::capture_interval(&state.db, bus_id).await?))
 }
 
+/// GET /buses/{bus_id}/headcount
+async fn get_headcount(
+    State(state): State<AppState>,
+    _access: DisplayAccess,
+    ApiPath(bus_id): ApiPath<i32>,
+) -> Result<Json<BusHeadcount>, AppError> {
+    Ok(Json(service::bus_headcount(&state.db, bus_id).await?))
+}
+
 /// GET /buses/{bus_id}/occupancy
 async fn get_occupancy(
     State(state): State<AppState>,
@@ -142,6 +154,7 @@ pub fn router() -> Router<AppState> {
             get(get_capture_interval),
         )
         .route("/buses/{bus_id}/occupancy", get(get_occupancy))
+        .route("/buses/{bus_id}/headcount", get(get_headcount))
         .route("/passes/catalog/{product_id}", get(get_product))
         .merge(super::admin_routes::router())
 }

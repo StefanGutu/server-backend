@@ -5,6 +5,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -17,13 +18,17 @@ use crate::{
     extract::{ApiJson, ApiPath, ApiQuery, ListQuery},
     modules::{
         auth::extractor::CurrentUser,
-        display_info::{self, admin_models::ChargesQuery, extractor::Caller},
+        display_info::{
+            self,
+            admin_models::{ChargeKind, ChargesQuery},
+            extractor::Caller,
+        },
     },
     state::AppState,
 };
 
-/// The query of `GET /charges`. The app uses `limit` and `before`; the display uses `limit`, `offset`, `user_id` and
-/// `status` (they are plain fields in one struct: a `flatten` would not read numbers from a URL).
+/// The query of `GET /charges`. The app uses `limit` and `before`; the display uses `limit`, `offset`, `user_id`,
+/// `status`, `from`, `to` and `kind` (the app's own list ignores the last two) (they are plain fields in one struct: a `flatten` would not read numbers from a URL).
 #[derive(Debug, Deserialize)]
 struct ChargesCallQuery {
     limit: Option<i64>,
@@ -31,6 +36,9 @@ struct ChargesCallQuery {
     offset: Option<i64>,
     user_id: Option<Uuid>,
     status: Option<ChargeStatus>,
+    from: Option<DateTime<Utc>>,
+    to: Option<DateTime<Utc>>,
+    kind: Option<ChargeKind>,
 }
 
 /// GET /charges?limit=&before=: the charges of the logged-in user, newest first. With the display token it is the
@@ -52,6 +60,9 @@ async fn get_charges(
             let display = ChargesQuery {
                 user_id: query.user_id,
                 status: query.status,
+                from: query.from,
+                to: query.to,
+                kind: query.kind,
                 limit: query.limit,
                 offset: query.offset,
             };

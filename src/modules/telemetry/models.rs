@@ -1,4 +1,6 @@
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
+use sqlx::FromRow;
 
 /// The JSON Node A sends (server.md). Fields we do not store (heading, sats, ...)
 /// are ignored by serde.
@@ -16,4 +18,15 @@ pub struct Telemetry {
     pub lon: Option<f64>,
     pub speed_kmh: Option<f64>,
     pub fix_ok: bool,
+}
+
+/// A GPS position of a bus with when the server received it, how fast the bus went and whether it is simulated.
+/// (`at` is the time of the server: the clock of the device is often 0.)
+#[derive(Debug, Clone, PartialEq, FromRow)]
+pub struct Fix {
+    pub lat: f64,
+    pub lon: f64,
+    pub speed_kmh: Option<f64>,
+    pub simulated: bool,
+    pub at: DateTime<Utc>,
 }

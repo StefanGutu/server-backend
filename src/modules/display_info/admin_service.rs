@@ -9,13 +9,13 @@ use uuid::Uuid;
 
 use super::{
     admin_models::{
-        ChargeAdminItem, ChargeAdminRow, ChargesQuery, OwnerQuery, Paging, PassAdminItem,
-        PassAdminRow, ReportAdminItem, ReportAdminRow, RideDetail, RideListItem, RideRow,
-        RidesQuery, Session, SightingInfo, SightingsQuery, TokenRow, TripAdminItem, UserDetail,
-        UserListItem, UserRow, UsersQuery, VerificationInfo, VerificationsQuery,
+        ChargeAdminItem, ChargeAdminRow, ChargeKind, ChargesQuery, OwnerQuery, Paging,
+        PassAdminItem, PassAdminRow, ReportAdminItem, ReportAdminRow, RideDetail, RideListItem,
+        RideRow, RidesQuery, Session, SightingInfo, SightingsQuery, TokenRow, TripAdminItem,
+        UserDetail, UserListItem, UserRow, UsersQuery, VerificationInfo, VerificationsQuery,
     },
     admin_repo as repo,
-    service::clean_limit,
+    service::{check_range, clean_limit},
 };
 use crate::{
     error::AppError,
@@ -212,17 +212,13 @@ pub async fn ride_detail(db: &PgPool, session_id: Uuid) -> Result<RideDetail, Ap
     })
 }
 
-/// A charge row as the list shows it: `kind` is `pass_renewal` when it has no ride, `ride` otherwise. Pure.
+/// A charge row as the list shows it: `kind` is `pass_renewal` when it has no ride, `ride` otherwise (`ChargeKind::of`). Pure.
 pub fn charge_item(row: ChargeAdminRow) -> ChargeAdminItem {
     ChargeAdminItem {
         id: row.id,
         user_id: row.user_id,
         session_id: row.session_id,
-        kind: if row.session_id.is_none() {
-            "pass_renewal"
-        } else {
-            "ride"
-        },
+        kind: ChargeKind::of(row.session_id),
         line: row.line,
         destination: row.destination,
         amount: row.amount_bani,
@@ -243,7 +239,8 @@ pub async fn list_charges(
     query: &ChargesQuery,
 ) -> Result<Vec<ChargeAdminItem>, AppError> {
     let (limit, offset) = resolve_paging(&query.paging())?;
-    let rows = repo::list_charges(db, query.user_id, query.status, limit, offset).await?;
+    check_range(query.from, query.to)?;
+    let rows = repo::list_charges(db, query, limit, offset).await?;
     Ok(rows.into_iter().map(charge_item).collect())
 }
 

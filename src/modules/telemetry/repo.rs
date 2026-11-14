@@ -1,6 +1,6 @@
 use sqlx::PgPool;
 
-use super::models::Telemetry;
+use super::models::{Fix, Telemetry};
 
 /// GPS positions (lat, lon) of a bus received in [from_epoch, to_epoch), oldest first.
 /// Only messages with a GPS fix; simulator messages (`sim = 1`) only when `allow_sim`.
@@ -40,6 +40,50 @@ pub async fn delete_beyond_newest(db: &PgPool, keep: i64) -> Result<u64, sqlx::E
     .execute(db)
     .await?;
     Ok(result.rows_affected())
+}
+
+/// The positions of a bus received from `since_epoch` on, **newest first** (at most `limit`), with their time, speed and
+/// whether they are simulated. Only messages with a GPS fix; simulator messages (`sim = 1`) only when `allow_sim`.
+pub async fn recent_fixes(
+    db: &PgPool,
+    bus_id: i32,
+    since_epoch: i64,
+    allow_sim: bool,
+    limit: i64,
+) -> Result<Vec<Fix>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT lat, lon, speed_kmh, (sim = 1) AS simulated, received_at AS at FROM telemetry
+         WHERE bus_id = $1 AND fix_ok AND lat IS NOT NULL AND lon IS NOT NULL
+           AND received_at >= to_timestamp($2) AND (sim = 0 OR $3)
+         ORDER BY received_at DESC, id DESC LIMIT $4",
+    )
+    .bind(bus_id)
+    .bind(since_epoch as f64)
+    .bind(allow_sim)
+    .bind(limit)
+    .fetch_all(db)
+    .await
+}
+
+/// The first position (lat, lon) of a bus received from `since_epoch` on, or None. Only messages with a GPS fix;
+/// simulator messages (`sim = 1`) only when `allow_sim`.
+pub async fn first_position(
+    db: &PgPool,
+    bus_id: i32,
+    since_epoch: i64,
+    allow_sim: bool,
+) -> Result<Option<(f64, f64)>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT lat, lon FROM telemetry
+         WHERE bus_id = $1 AND fix_ok AND lat IS NOT NULL AND lon IS NOT NULL
+           AND received_at >= to_timestamp($2) AND (sim = 0 OR $3)
+         ORDER BY received_at, id LIMIT 1",
+    )
+    .bind(bus_id)
+    .bind(since_epoch as f64)
+    .bind(allow_sim)
+    .fetch_optional(db)
+    .await
 }
 
 /// Stores one message. A message already stored (same device, boot, seq) is skipped.

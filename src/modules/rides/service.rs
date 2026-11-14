@@ -9,6 +9,7 @@ use super::{
         BusEvidence, Candidate, ConfirmInput, OfferedBy, Payment, PaymentReason, Ride, RideRef,
         RideReply, RideSession, RideStatus, Vehicle,
     },
+    progress::{self, Progress, RouteLine, build_progress},
     repo,
 };
 use crate::{
@@ -20,14 +21,18 @@ use crate::{
             models::{Charge, ChargeStatus, NewCharge},
         },
         devices::{self, models::BusLine},
-        extras::notifications::{
-            self,
-            push::{Push, PushSender, PushType},
+        extras::{
+            notifications::{
+                self,
+                push::{Push, PushSender, PushType},
+            },
+            trips::service::nearest_stop,
         },
         idempotency::{
             self,
             models::{Begin, IdempotentRequest},
         },
+        telemetry,
         wallet::{
             self,
             models::{PaymentMethod, Source},
@@ -38,11 +43,23 @@ use crate::{
 
 /// Slots in a row the user must hear a bus before we think they are on it
 /// (open question 3 in PLAN.md).
-pub const REQUIRED_SLOTS: usize = 3;
-/// Metres the bus must move during those slots (open question 3).
+pub const REQUIRED_SLOTS: usize = 1;
+/// Slots without hearing the user before a ride may be ended (or a `pending` one given up). The phone's
+/// sighting for a slot can arrive up to ~30 s into that slot, so 1 would end rides that are fine.
+pub const SILENCE_SLOTS: i64 = 2;
+/// Metres the bus must move for the user to be asked to pay. 0: the user is asked as soon as they are heard
+/// (a bus cannot drive far in the first seconds). Raise it to ask only when the bus is really moving.
+pub const MIN_BOARDING_MOVEMENT_M: f64 = 0.0;
+/// Metres the bus must keep moving after the user went silent for the ride to be over (not a lost signal).
 pub const MIN_MOVEMENT_M: f64 = 300.0;
+/// A `pending` ride this old (seconds since the user was first heard) is looked at again by the background
+/// task, so the question to pay does not wait for the next sighting (up to a whole slot away).
+pub const FIRST_OFFER_AFTER_SECS: i64 = 10;
 /// Seconds the user has to answer before the ride expires (open question 4).
 const CONFIRM_WINDOW_SECS: i64 = 120;
+/// Seconds after a ride was rejected (declined, or nobody answered) before a user who is still on the
+/// bus is asked again. The background task checks every few seconds, so the question comes 10 to 15 s later.
+pub const REOFFER_AFTER_SECS: i64 = 10;
 
 /// How long the app waits before asking again (server-api.md). `None`: stop asking.
 pub fn poll_after_ms(status: RideStatus) -> Option<u32> {
@@ -50,7 +67,7 @@ pub fn poll_after_ms(status: RideStatus) -> Option<u32> {
         RideStatus::Pending | RideStatus::AwaitingConfirmation | RideStatus::PaymentFailed => {
             Some(3000)
         }
-        RideStatus::Confirmed => Some(15000),
+        RideStatus::Confirmed => Some(5000), // the next stop must change in time
         RideStatus::None | RideStatus::Rejected | RideStatus::Ended => None,
     }
 }
@@ -79,6 +96,7 @@ pub fn no_ride(now: DateTime<Utc>) -> Ride {
         candidates: Vec::new(),
         payment: None,
         charge: None,
+        progress: None,
     }
 }
 
@@ -123,6 +141,8 @@ pub fn build_ride(session: RideSession, bus: Option<BusLine>, charge: Option<Cha
         } else {
             None
         },
+        // filled in by `current_ride`, which reads the position of the bus (this function does no reading)
+        progress: None,
     }
 }
 
@@ -136,6 +156,21 @@ pub fn etag_of(session: Option<&RideSession>) -> String {
     }
 }
 
+/// The ETag of the ride with the position of its bus. A `confirmed` ride shows where the bus is, so its ETag also changes
+/// when the newest position changes (`<id>-v<version>-<time of the position in ms>`), or when there is no position newer than
+/// 30 seconds (`-x`): the app gets a 200 while the bus moves and a 304 when it does not. Any other ride has the ETag of
+/// `etag_of`. Pure.
+pub fn etag_of_ride(session: Option<&RideSession>, position_at_ms: Option<i64>) -> String {
+    let base = etag_of(session);
+    match session {
+        Some(s) if s.status == RideStatus::Confirmed => {
+            let part = position_at_ms.map_or_else(|| "x".to_string(), |ms| ms.to_string());
+            format!("{}-{part}\"", base.trim_end_matches('"'))
+        }
+        _ => base,
+    }
+}
+
 /// True when the `If-None-Match` header names our ETag. The header may hold several ETags
 /// separated by commas, a weak mark (`W/`), or `*` (any version).
 pub fn etag_matches(if_none_match: &str, etag: &str) -> bool {
@@ -145,20 +180,40 @@ pub fn etag_matches(if_none_match: &str, etag: &str) -> bool {
 }
 
 /// GET /rides/current: the user's latest ride, or the `none` ride. When `if_none_match`
-/// names the current version nothing else is loaded: the app polls every 3 seconds.
+/// names the current version nothing else is loaded: the app polls every 3 seconds (every 5 while the ride is `confirmed`).
+///
+/// A `confirmed` ride shows where the bus is (`progress`), so its ETag includes the time of the newest position: that
+/// one cheap read decides the 304, and only a changed ride loads the route and the rest. `allow_sim`: simulator positions
+/// count (test mode only).
 pub async fn current_ride(
     db: &PgPool,
     user_id: Uuid,
     if_none_match: Option<&str>,
+    allow_sim: bool,
 ) -> Result<RideReply, AppError> {
     let session = repo::find_current_session(db, user_id).await?;
-    let etag = etag_of(session.as_ref());
+    let now = Utc::now();
+    let position_at_ms = match &session {
+        Some(s) if s.status == RideStatus::Confirmed => telemetry::service::recent_fixes(
+            db,
+            s.bus_id,
+            now.timestamp(),
+            progress::POSITION_FRESH_SECS,
+            allow_sim,
+            1,
+        )
+        .await?
+        .first()
+        .map(|fix| fix.at.timestamp_millis()),
+        _ => None,
+    };
+    let etag = etag_of_ride(session.as_ref(), position_at_ms);
     if if_none_match.is_some_and(|header| etag_matches(header, &etag)) {
         return Ok(RideReply::NotModified { etag });
     }
 
     let ride = match session {
-        None => no_ride(Utc::now()),
+        None => no_ride(now),
         Some(session) => {
             let bus = if needs_vehicle(&session) {
                 devices::service::bus_line(db, session.bus_id).await?
@@ -170,13 +225,68 @@ pub async fn current_ride(
             } else {
                 None
             };
-            build_ride(session, bus, charge)
+            let progress = progress_of(db, &session, allow_sim, now).await?;
+            let mut ride = build_ride(session, bus, charge);
+            ride.progress = progress;
+            ride
         }
     };
     Ok(RideReply::Modified {
         ride: Box::new(ride),
         etag,
     })
+}
+
+/// How far back the positions of the bus are read to see which way it goes (seconds), and how many at most.
+const TRAIL_SECS: i64 = 60;
+const TRAIL_FIXES: i64 = 40;
+
+/// The `progress` of a ride: where the bus is, where the user got on, the next stop and the stops of the route
+/// (the geometry is `progress::build_progress`). Only a `confirmed` ride has one: any other is `None`. `allow_sim`:
+/// simulator positions count (test mode only). `now` is the time of the call.
+///
+/// "Where the user got on" is the stop nearest to the first position the bus sent after the ride began (`created_at`).
+pub async fn progress_of(
+    db: &PgPool,
+    session: &RideSession,
+    allow_sim: bool,
+    now: DateTime<Utc>,
+) -> Result<Option<Progress>, AppError> {
+    if session.status != RideStatus::Confirmed {
+        return Ok(None);
+    }
+    let route = devices::service::route_of_bus(db, session.bus_id).await?;
+    let line = route.as_ref().and_then(|r| RouteLine::new(&r.points.0));
+    let recent = telemetry::service::recent_fixes(
+        db,
+        session.bus_id,
+        now.timestamp(),
+        TRAIL_SECS,
+        allow_sim,
+        TRAIL_FIXES,
+    )
+    .await?;
+    let boarded_stop = match &route {
+        Some(route) => {
+            let first = telemetry::service::first_position(
+                db,
+                session.bus_id,
+                session.created_at.timestamp(),
+                allow_sim,
+            )
+            .await?;
+            first
+                .and_then(|position| nearest_stop(&route.points.0, position))
+                .map(str::to_string)
+        }
+        None => None,
+    };
+    Ok(Some(build_progress(
+        line.as_ref(),
+        &recent,
+        boarded_stop,
+        now,
+    )))
 }
 
 /// What a new sighting changes about the ride.
@@ -199,7 +309,9 @@ pub enum RideAction {
 /// A bus we think the user is on: heard in enough slots in a row, the bus moved, and it is
 /// still being heard (not an old run of a bus the user left behind).
 fn qualifies(e: &BusEvidence, newest_slot: i64) -> bool {
-    e.run_len >= REQUIRED_SLOTS && e.moved_m >= MIN_MOVEMENT_M && e.last_slot >= newest_slot - 1
+    e.run_len >= REQUIRED_SLOTS
+        && e.moved_m >= MIN_BOARDING_MOVEMENT_M
+        && e.last_slot >= newest_slot - 1
 }
 
 /// The boarding decision. Pure: the current ride and what we know about the heard buses
@@ -262,6 +374,27 @@ pub fn decide(current: Option<&RideSession>, evidence: &[BusEvidence]) -> RideAc
     }
 }
 
+/// A rejected ride whose cooldown is over, while the user is still heard on a bus: the bus to ask about again
+/// (the lowest id of the buses heard in the newest slot). `now` is in Unix seconds. Pure.
+/// This is on top of `decide`, which asks again only when the user's hearing starts anew.
+pub fn reoffer_bus(current: &RideSession, evidence: &[BusEvidence], now: i64) -> Option<i32> {
+    if current.status != RideStatus::Rejected
+        || now - current.updated_at.timestamp() < REOFFER_AFTER_SECS
+    {
+        return None;
+    }
+    let newest_slot = evidence.iter().map(|e| e.last_slot).max()?;
+    // The user must be heard right now, not only some time ago.
+    if newest_slot < now / crate::modules::sightings::service::SLOT_SECS - 1 {
+        return None;
+    }
+    evidence
+        .iter()
+        .filter(|e| e.last_slot == newest_slot)
+        .map(|e| e.bus_id)
+        .min()
+}
+
 /// The candidates of a ride: each bus with its line.
 async fn candidates_for(db: &PgPool, bus_ids: &[i32]) -> Result<Vec<Candidate>, AppError> {
     let mut candidates = Vec::new();
@@ -285,9 +418,42 @@ pub async fn update_from_sightings(
     evidence: &[BusEvidence],
 ) -> Result<RideStatus, AppError> {
     let current = repo::find_current_session(db, user_id).await?;
-    let expires_at = Utc::now() + chrono::Duration::seconds(CONFIRM_WINDOW_SECS);
+    let mut action = decide(current.as_ref(), evidence);
+    // A rejected ride whose cooldown is over: ask again, even though the user never stopped being heard.
+    if action == RideAction::Nothing
+        && let Some(bus_id) = current
+            .as_ref()
+            .and_then(|s| reoffer_bus(s, evidence, Utc::now().timestamp()))
+    {
+        action = RideAction::Start { bus_id };
+    }
+    let started = matches!(action, RideAction::Start { .. });
+    apply_action(db, push, user_id, current.as_ref(), action, evidence).await?;
 
-    match (decide(current.as_ref(), evidence), &current) {
+    if started {
+        // A ride was just started for a user who is heard: ask to pay at once, instead of waiting
+        // for one more sighting (the phone sends one per 30 s slot).
+        let current = repo::find_current_session(db, user_id).await?;
+        let action = decide(current.as_ref(), evidence);
+        apply_action(db, push, user_id, current.as_ref(), action, evidence).await?;
+    }
+
+    // Read the ride again: it is the truth even if another request changed it meanwhile.
+    let after = repo::find_current_session(db, user_id).await?;
+    Ok(after.map_or(RideStatus::None, |s| s.status))
+}
+
+/// Does what the decision says: starts a ride, or offers it to the user and pushes a message.
+async fn apply_action(
+    db: &PgPool,
+    push: &PushSender,
+    user_id: Uuid,
+    current: Option<&RideSession>,
+    action: RideAction,
+    evidence: &[BusEvidence],
+) -> Result<(), AppError> {
+    let expires_at = Utc::now() + chrono::Duration::seconds(CONFIRM_WINDOW_SECS);
+    match (action, current) {
         (RideAction::Start { bus_id }, _) => {
             repo::insert_pending(db, user_id, bus_id, expires_at).await?
         }
@@ -313,10 +479,7 @@ pub async fn update_from_sightings(
         }
         _ => {}
     }
-
-    // Read the ride again: it is the truth even if another request changed it meanwhile.
-    let after = repo::find_current_session(db, user_id).await?;
-    Ok(after.map_or(RideStatus::None, |s| s.status))
+    Ok(())
 }
 
 /// Rides that waited too long for an answer become `rejected`. Returns how many.
@@ -324,15 +487,26 @@ pub async fn reject_unanswered(db: &PgPool) -> Result<u64, AppError> {
     Ok(repo::reject_expired(db).await?)
 }
 
+/// The users whose newest ride was rejected at least `REOFFER_AFTER_SECS` ago (and not over an hour ago): the
+/// background task asks them again if they are still heard.
+pub async fn rejected_rides_to_reoffer(db: &PgPool) -> Result<Vec<RideRef>, AppError> {
+    Ok(repo::find_rejected_older_than(db, REOFFER_AFTER_SECS).await?)
+}
+
+/// The `pending` rides that are at least `FIRST_OFFER_AFTER_SECS` old.
+pub async fn old_pending_rides(db: &PgPool) -> Result<Vec<RideRef>, AppError> {
+    Ok(repo::find_pending_older_than(db, FIRST_OFFER_AFTER_SECS).await?)
+}
+
 /// The rides in this status (the background task looks at `pending` and `confirmed` ones).
 pub async fn rides_with_status(db: &PgPool, status: RideStatus) -> Result<Vec<RideRef>, AppError> {
     Ok(repo::find_by_status(db, status).await?)
 }
 
-/// The user has not been heard near the bus for as many slots in a row as it takes to board.
+/// The user has not been heard near the bus for `SILENCE_SLOTS` slots in a row.
 /// `last_heard_slot` is the newest slot of the user's sightings of that bus.
 pub fn went_silent(last_heard_slot: i64, now_slot: i64) -> bool {
-    now_slot - last_heard_slot >= REQUIRED_SLOTS as i64
+    now_slot - last_heard_slot >= SILENCE_SLOTS
 }
 
 /// The bus kept moving after the user was last heard (`moved_m` metres since then).
@@ -557,7 +731,9 @@ async fn confirm_locked(
         .await?
         .ok_or(AppError::NotFound)?;
     let bus_id = match check_confirmable(&session, input, Utc::now())? {
-        Confirmable::AlreadyConfirmed => return current_ride(db, user.id, None).await,
+        Confirmable::AlreadyConfirmed => {
+            return current_ride(db, user.id, None, pay.test_mode).await;
+        }
         Confirmable::Ready { bus_id } => bus_id,
     };
     let bus = devices::service::bus_line(db, bus_id)
@@ -670,7 +846,7 @@ async fn confirm_locked(
             "ride confirmed"
         );
     }
-    current_ride(db, user.id, None).await
+    current_ride(db, user.id, None, pay.test_mode).await
 }
 
 /// Can this ride be declined now?
@@ -709,15 +885,25 @@ pub fn check_declinable(session: &RideSession, now: DateTime<Utc>) -> Result<Dec
 /// POST /rides/{sessionId}/decline: the user says "this is not my ride". The ride becomes `rejected`
 /// and the app gets it. Takes the same lock as confirm, so a decline and a confirm of one ride run
 /// one after the other.
-pub async fn decline(db: &PgPool, user: &User, session_id: Uuid) -> Result<RideReply, AppError> {
+pub async fn decline(
+    db: &PgPool,
+    user: &User,
+    session_id: Uuid,
+    allow_sim: bool,
+) -> Result<RideReply, AppError> {
     let name = format!("ride:{session_id}");
     let lock = idempotency::service::lock(db, &name).await?;
-    let result = decline_locked(db, user, session_id).await;
+    let result = decline_locked(db, user, session_id, allow_sim).await;
     idempotency::service::unlock(lock, &name).await;
     result
 }
 
-async fn decline_locked(db: &PgPool, user: &User, session_id: Uuid) -> Result<RideReply, AppError> {
+async fn decline_locked(
+    db: &PgPool,
+    user: &User,
+    session_id: Uuid,
+    allow_sim: bool,
+) -> Result<RideReply, AppError> {
     let session = repo::find_session(db, user.id, session_id)
         .await?
         .ok_or(AppError::NotFound)?;
@@ -726,7 +912,7 @@ async fn decline_locked(db: &PgPool, user: &User, session_id: Uuid) -> Result<Ri
     {
         tracing::info!(session_id = %session.id, user_id = %user.id, "ride declined by the user");
     }
-    current_ride(db, user.id, None).await
+    current_ride(db, user.id, None, allow_sim).await
 }
 
 /// What "I am on the bus" does to the user's ride.
@@ -777,6 +963,7 @@ pub async fn start_manual_ride(
     push: &PushSender,
     user_id: Uuid,
     heard_bus_ids: &[i32],
+    allow_sim: bool,
 ) -> Result<RideReply, AppError> {
     let Some((bus_id, candidate_bus_ids)) = manual_offer(heard_bus_ids) else {
         return Err(AppError::Unprocessable(
@@ -822,5 +1009,5 @@ pub async fn start_manual_ride(
         }
     }
     tracing::info!(user_id = %user_id, bus_id, "manual ride: the user says they are on the bus");
-    current_ride(db, user_id, None).await
+    current_ride(db, user_id, None, allow_sim).await
 }
