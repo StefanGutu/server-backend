@@ -4,7 +4,11 @@ use sqlx::PgPool;
 
 use crate::{
     config::Config,
-    modules::{auth::id_token::IdTokenVerifier, wallet::provider::PaymentProvider},
+    modules::{
+        auth::id_token::IdTokenVerifier, extras::notifications::push::PushSender,
+        wallet::provider::PaymentProvider,
+    },
+    rate_limit::RateLimiter,
 };
 
 /// Shared data given to every request handler.
@@ -17,4 +21,8 @@ pub struct AppState {
     pub payments: Arc<dyn PaymentProvider>,
     /// Checks the `idToken` of a Google or Apple sign-in (a test verifier in test mode).
     pub id_tokens: IdTokenVerifier,
+    /// Sends pushes to the phones of the users (the fake one only writes them in the log).
+    pub push: PushSender,
+    /// Counts the login calls of each IP address (step 34).
+    pub rate_limiter: Arc<RateLimiter>,
 }

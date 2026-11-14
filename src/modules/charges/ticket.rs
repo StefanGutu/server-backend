@@ -37,7 +37,13 @@ pub struct TicketClaims {
 impl TicketClaims {
     /// Claims for a ticket made at `now` (unix seconds): valid for `TICKET_VALID_SECS`.
     pub fn new(charge_id: Uuid, line: &str, passengers: i32, now: i64) -> Self {
-        Self { cid: charge_id, line: line.to_string(), pax: passengers, iat: now, exp: now + TICKET_VALID_SECS }
+        Self {
+            cid: charge_id,
+            line: line.to_string(),
+            pax: passengers,
+            iat: now,
+            exp: now + TICKET_VALID_SECS,
+        }
     }
 }
 
@@ -55,9 +61,16 @@ impl TicketKey {
         let jwk = Jwk::from_encoding_key(&EncodingKey::from_ed_der(&private_key), Algorithm::EdDSA)
             .map_err(|e| server_error("cannot get the public key", e))?;
         let AlgorithmParameters::OctetKeyPair(params) = jwk.algorithm else {
-            return Err(server_error("cannot get the public key", "not an Ed25519 key"));
+            return Err(server_error(
+                "cannot get the public key",
+                "not an Ed25519 key",
+            ));
         };
-        Ok(Self { kid, public_key: params.x, private_key })
+        Ok(Self {
+            kid,
+            public_key: params.x,
+            private_key,
+        })
     }
 }
 
@@ -81,7 +94,11 @@ pub fn read(token: &str, keys: &[TicketKey]) -> Option<TicketClaims> {
     validation.leeway = 0;
     validation.validate_exp = false; // `verify` checks it against a time it is given
     validation.set_required_spec_claims(&["exp", "iat"]);
-    Some(decode::<TicketClaims>(token, &decoding_key, &validation).ok()?.claims)
+    Some(
+        decode::<TicketClaims>(token, &decoding_key, &validation)
+            .ok()?
+            .claims,
+    )
 }
 
 /// The claims of a token that was signed by one of `keys` and has not expired (`now` is unix

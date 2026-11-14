@@ -16,8 +16,8 @@ pub fn init() {
     let file = File::create(LOG_FILE).expect("cannot create the log file");
 
     // Log level comes from RUST_LOG, default is "info".
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "info,tower_http=debug".into());
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| "info,tower_http=debug".into());
 
     tracing_subscriber::registry()
         .with(filter)

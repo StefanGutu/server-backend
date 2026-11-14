@@ -7,8 +7,8 @@ use uuid::Uuid;
 
 use super::{
     models::{
-        NewCardInput, NewPassInput, PassCheck, PassLines, PassProduct, PassRow, PaymentMethod, RenewAnswer,
-        RenewInput, SetupResponse, Source, WalletItem,
+        NewCardInput, NewPassInput, PassCheck, PassLines, PassProduct, PassRow, PaymentMethod,
+        RenewAnswer, RenewInput, SetupResponse, Source, WalletItem,
     },
     provider::{ChargeResult, PaymentProvider},
     repo,
@@ -37,8 +37,13 @@ fn expiry_ok(expiry: &str) -> bool {
     let bytes = expiry.as_bytes();
     bytes.len() == 5
         && bytes[2] == b'/'
-        && bytes.iter().enumerate().all(|(i, b)| i == 2 || b.is_ascii_digit())
-        && expiry[..2].parse::<u8>().is_ok_and(|month| (1..=12).contains(&month))
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(i, b)| i == 2 || b.is_ascii_digit())
+        && expiry[..2]
+            .parse::<u8>()
+            .is_ok_and(|month| (1..=12).contains(&month))
 }
 
 /// Shape of the card data the app sends. A wrong shape is a 400.
@@ -60,13 +65,19 @@ pub fn validate_new_card(card: &NewCardInput) -> Result<(), AppError> {
 
 /// POST /wallet/payment-methods/setup: a client secret for the app to add a card with.
 pub async fn start_card_setup(provider: &dyn PaymentProvider) -> Result<SetupResponse, AppError> {
-    Ok(SetupResponse { client_secret: provider.create_setup().await? })
+    Ok(SetupResponse {
+        client_secret: provider.create_setup().await?,
+    })
 }
 
 /// POST /wallet/payment-methods: remember a card the provider already holds.
 /// The first item of a user becomes the default way to pay.
 /// Adding the same `paymentMethodId` again returns the card that is already there.
-pub async fn add_card(db: &PgPool, user_id: Uuid, card: &NewCardInput) -> Result<WalletItem, AppError> {
+pub async fn add_card(
+    db: &PgPool,
+    user_id: Uuid,
+    card: &NewCardInput,
+) -> Result<WalletItem, AppError> {
     validate_new_card(card)?;
     if let Some(added) = repo::insert_card(db, user_id, card).await? {
         auth::service::set_default_source_if_none(db, user_id, added.id).await?;
@@ -104,7 +115,11 @@ pub fn validate_new_pass(pass: &NewPassInput, today: NaiveDate) -> Result<(), Ap
 
 /// POST /wallet/passes: add a pass. It is valid from today. The first item of a user becomes the
 /// default way to pay. Adding the same pass card number again returns the pass that is already there.
-pub async fn add_pass(db: &PgPool, user_id: Uuid, pass: &NewPassInput) -> Result<WalletItem, AppError> {
+pub async fn add_pass(
+    db: &PgPool,
+    user_id: Uuid,
+    pass: &NewPassInput,
+) -> Result<WalletItem, AppError> {
     let today = chrono::Utc::now().date_naive();
     validate_new_pass(pass, today)?;
     if let Some(added) = repo::insert_pass(db, user_id, pass, today).await? {
@@ -145,8 +160,13 @@ pub async fn delete_item(db: &PgPool, user_id: Uuid, item_id: Uuid) -> Result<()
         return Err(AppError::NotFound);
     }
     auth::service::clear_default_source_if(db, user_id, item_id).await?;
-    let deleted = repo::delete_card(db, user_id, item_id).await? || repo::delete_pass(db, user_id, item_id).await?;
-    if deleted { Ok(()) } else { Err(AppError::NotFound) }
+    let deleted = repo::delete_card(db, user_id, item_id).await?
+        || repo::delete_pass(db, user_id, item_id).await?;
+    if deleted {
+        Ok(())
+    } else {
+        Err(AppError::NotFound)
+    }
 }
 
 /// PUT /wallet/default-source: the card or pass to pay with when the app does not say.
@@ -177,7 +197,12 @@ pub async fn first_card(db: &PgPool, user_id: Uuid) -> Result<Option<PaymentMeth
 
 /// Can this pass cover a ride on `line` today? Pure. A pass nobody verified does not count,
 /// except with `allow_unverified` (test mode: no verification service exists yet, R21).
-pub fn check_pass(pass: &PassRow, line: &str, today: NaiveDate, allow_unverified: bool) -> PassCheck {
+pub fn check_pass(
+    pass: &PassRow,
+    line: &str,
+    today: NaiveDate,
+    allow_unverified: bool,
+) -> PassCheck {
     if !pass.verified && !allow_unverified {
         return PassCheck::NotVerified;
     }
@@ -259,14 +284,26 @@ async fn renew_locked(
     pass_id: Uuid,
     input: &RenewInput,
 ) -> Result<RenewAnswer, AppError> {
-    let pass = repo::find_pass(db, user.id, pass_id).await?.ok_or(AppError::NotFound)?;
-    let product = repo::find_product(db, input.product_id).await?.ok_or(AppError::NotFound)?;
-    let Source::Card(card) = find_source(db, user.id, input.source_id).await?.ok_or(AppError::NotFound)? else {
-        return Err(AppError::Validation("A pass is paid with a card, not with another pass.".into()));
+    let pass = repo::find_pass(db, user.id, pass_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let product = repo::find_product(db, input.product_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+    let Source::Card(card) = find_source(db, user.id, input.source_id)
+        .await?
+        .ok_or(AppError::NotFound)?
+    else {
+        return Err(AppError::Validation(
+            "A pass is paid with a card, not with another pass.".into(),
+        ));
     };
 
     if product.price_bani > 0 {
-        match provider.charge(&card.provider_method_id, product.price_bani).await? {
+        match provider
+            .charge(&card.provider_method_id, product.price_bani)
+            .await?
+        {
             ChargeResult::Paid => {}
             ChargeResult::Declined => {
                 tracing::warn!(pass_id = %pass.id, reason = "card_declined", "pass renewal: payment failed");
@@ -280,8 +317,13 @@ async fn renew_locked(
     }
 
     let now = Utc::now();
-    let (valid_from, valid_until) =
-        renewed_dates(pass.valid_from, pass.valid_until, now.date_naive(), product.days).ok_or(AppError::Server)?;
+    let (valid_from, valid_until) = renewed_dates(
+        pass.valid_from,
+        pass.valid_until,
+        now.date_naive(),
+        product.days,
+    )
+    .ok_or(AppError::Server)?;
     // The charge is over at once: there is no ride. Its line is the name of the product.
     let charge = charges::service::create_charge(
         db,
@@ -299,9 +341,19 @@ async fn renew_locked(
         },
     )
     .await?;
-    let renewed = repo::renew_pass(db, user.id, pass.id, valid_from, valid_until, &product.lines.0)
-        .await?
-        .ok_or(AppError::Server)?;
+    let renewed = repo::renew_pass(
+        db,
+        user.id,
+        pass.id,
+        valid_from,
+        valid_until,
+        &product.lines.0,
+    )
+    .await?
+    .ok_or(AppError::Server)?;
     tracing::info!(pass_id = %pass.id, product = %product.name, %valid_until, charge_id = %charge.id, "pass renewed");
-    Ok(RenewAnswer { item: renewed.into(), charge })
+    Ok(RenewAnswer {
+        item: renewed.into(),
+        charge,
+    })
 }

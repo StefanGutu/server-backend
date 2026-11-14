@@ -26,7 +26,11 @@ pub enum IdTokenVerifier {
 impl IdTokenVerifier {
     /// The verifier the server starts with: `Test` in test mode, otherwise `Unconfigured`.
     pub fn for_mode(test_mode: bool) -> Self {
-        if test_mode { Self::Test } else { Self::Unconfigured }
+        if test_mode {
+            Self::Test
+        } else {
+            Self::Unconfigured
+        }
     }
 
     /// The subject of a token: who the provider says it is. A token that does not check out is 401
@@ -36,7 +40,10 @@ impl IdTokenVerifier {
             Self::Test => test_subject(id_token)
                 .ok_or_else(|| AppError::AuthRejected("The ID token is not valid.".to_string())),
             Self::Unconfigured => {
-                tracing::error!(?provider, "sign-in with an ID token, but no verifier is set up: the token was refused");
+                tracing::error!(
+                    ?provider,
+                    "sign-in with an ID token, but no verifier is set up: the token was refused"
+                );
                 Err(AppError::Server)
             }
         }
@@ -48,6 +55,8 @@ impl IdTokenVerifier {
 pub fn test_subject(id_token: &str) -> Option<String> {
     let subject = id_token.trim().strip_prefix("test:")?;
     let allowed = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '@' | '-');
-    let well_formed = !subject.is_empty() && subject.chars().count() <= MAX_TEST_SUBJECT_LEN && subject.chars().all(allowed);
+    let well_formed = !subject.is_empty()
+        && subject.chars().count() <= MAX_TEST_SUBJECT_LEN
+        && subject.chars().all(allowed);
     well_formed.then(|| subject.to_string())
 }

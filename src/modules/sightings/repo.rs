@@ -9,15 +9,21 @@ pub async fn recent_sightings(
     user_id: Uuid,
     since_slot: i64,
 ) -> Result<Vec<(i32, i64)>, sqlx::Error> {
-    sqlx::query_as("SELECT bus_id, slot FROM sightings WHERE user_id = $1 AND slot >= $2 ORDER BY slot")
-        .bind(user_id)
-        .bind(since_slot)
-        .fetch_all(db)
-        .await
+    sqlx::query_as(
+        "SELECT bus_id, slot FROM sightings WHERE user_id = $1 AND slot >= $2 ORDER BY slot",
+    )
+    .bind(user_id)
+    .bind(since_slot)
+    .fetch_all(db)
+    .await
 }
 
 /// The newest slot in which the user heard this bus, or None if never.
-pub async fn last_slot(db: &PgPool, user_id: Uuid, bus_id: i32) -> Result<Option<i64>, sqlx::Error> {
+pub async fn last_slot(
+    db: &PgPool,
+    user_id: Uuid,
+    bus_id: i32,
+) -> Result<Option<i64>, sqlx::Error> {
     sqlx::query_scalar("SELECT max(slot) FROM sightings WHERE user_id = $1 AND bus_id = $2")
         .bind(user_id)
         .bind(bus_id)
@@ -34,12 +40,18 @@ pub async fn last_slot_any_bus(db: &PgPool, user_id: Uuid) -> Result<Option<i64>
 }
 
 /// The buses the user heard from `since_slot` on (each bus once).
-pub async fn recent_bus_ids(db: &PgPool, user_id: Uuid, since_slot: i64) -> Result<Vec<i32>, sqlx::Error> {
-    sqlx::query_scalar("SELECT DISTINCT bus_id FROM sightings WHERE user_id = $1 AND slot >= $2 ORDER BY bus_id")
-        .bind(user_id)
-        .bind(since_slot)
-        .fetch_all(db)
-        .await
+pub async fn recent_bus_ids(
+    db: &PgPool,
+    user_id: Uuid,
+    since_slot: i64,
+) -> Result<Vec<i32>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT DISTINCT bus_id FROM sightings WHERE user_id = $1 AND slot >= $2 ORDER BY bus_id",
+    )
+    .bind(user_id)
+    .bind(since_slot)
+    .fetch_all(db)
+    .await
 }
 
 /// Stores a sighting. The same user, bus and slot again is skipped (a retry).

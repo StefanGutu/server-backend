@@ -32,7 +32,8 @@ impl FromRequest<AppState> for SignedRequest {
             AppError::Validation(message.to_string())
         })?;
 
-        let device = service::authenticate(&state.db, &device_id, &timestamp, &signature, &body).await?;
+        let device =
+            service::authenticate(&state.db, &device_id, &timestamp, &signature, &body).await?;
         Ok(Self { device, body })
     }
 }

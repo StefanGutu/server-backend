@@ -55,7 +55,10 @@ pub struct Charge {
     pub paid_with: Uuid,
     #[serde(serialize_with = "utc_seconds")]
     pub started_at: DateTime<Utc>,
-    #[serde(skip_serializing_if = "Option::is_none", serialize_with = "utc_seconds_opt")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "utc_seconds_opt"
+    )]
     pub ended_at: Option<DateTime<Utc>>,
     pub qr_token: String,
 }
@@ -106,7 +109,11 @@ pub struct PublicKeysResponse {
 
 impl From<TicketKey> for PublicKeyInfo {
     fn from(key: TicketKey) -> Self {
-        Self { kid: key.kid, alg: "EdDSA", public_key: key.public_key }
+        Self {
+            kid: key.kid,
+            alg: "EdDSA",
+            public_key: key.public_key,
+        }
     }
 }
 

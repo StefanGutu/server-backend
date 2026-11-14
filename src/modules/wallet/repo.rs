@@ -44,7 +44,9 @@ pub async fn find_card_by_provider_id(
     provider_method_id: &str,
 ) -> Result<Option<PaymentMethod>, sqlx::Error> {
     sqlx::query_as(concat!(
-        "SELECT ", method_columns!(), " FROM payment_methods WHERE user_id = $1 AND provider_method_id = $2"
+        "SELECT ",
+        method_columns!(),
+        " FROM payment_methods WHERE user_id = $1 AND provider_method_id = $2"
     ))
     .bind(user_id)
     .bind(provider_method_id)
@@ -55,7 +57,9 @@ pub async fn find_card_by_provider_id(
 /// All cards of a user, in the order they were added (the ids are time-ordered).
 pub async fn list_cards(db: &PgPool, user_id: Uuid) -> Result<Vec<PaymentMethod>, sqlx::Error> {
     sqlx::query_as(concat!(
-        "SELECT ", method_columns!(), " FROM payment_methods WHERE user_id = $1 ORDER BY id"
+        "SELECT ",
+        method_columns!(),
+        " FROM payment_methods WHERE user_id = $1 ORDER BY id"
     ))
     .bind(user_id)
     .fetch_all(db)
@@ -101,7 +105,9 @@ pub async fn find_pass_by_card_number(
     card_number: &str,
 ) -> Result<Option<PassRow>, sqlx::Error> {
     sqlx::query_as(concat!(
-        "SELECT ", pass_columns!(), " FROM passes WHERE user_id = $1 AND card_number = $2"
+        "SELECT ",
+        pass_columns!(),
+        " FROM passes WHERE user_id = $1 AND card_number = $2"
     ))
     .bind(user_id)
     .bind(card_number)
@@ -111,10 +117,14 @@ pub async fn find_pass_by_card_number(
 
 /// All passes of a user.
 pub async fn list_passes(db: &PgPool, user_id: Uuid) -> Result<Vec<PassRow>, sqlx::Error> {
-    sqlx::query_as(concat!("SELECT ", pass_columns!(), " FROM passes WHERE user_id = $1 ORDER BY id"))
-        .bind(user_id)
-        .fetch_all(db)
-        .await
+    sqlx::query_as(concat!(
+        "SELECT ",
+        pass_columns!(),
+        " FROM passes WHERE user_id = $1 ORDER BY id"
+    ))
+    .bind(user_id)
+    .fetch_all(db)
+    .await
 }
 
 /// Deletes a card of this user. False when there is no such card.
@@ -151,35 +161,57 @@ pub async fn item_exists(db: &PgPool, user_id: Uuid, id: Uuid) -> Result<bool, s
 
 /// The passes that can be bought: the shortest first, then the cheapest.
 pub async fn list_products(db: &PgPool) -> Result<Vec<PassProduct>, sqlx::Error> {
-    sqlx::query_as("SELECT id, name, days, price_bani, lines FROM pass_products ORDER BY days, price_bani, id")
-        .fetch_all(db)
-        .await
+    sqlx::query_as(
+        "SELECT id, name, days, price_bani, lines FROM pass_products ORDER BY days, price_bani, id",
+    )
+    .fetch_all(db)
+    .await
 }
 
 /// One card of this user, or None.
-pub async fn find_card(db: &PgPool, user_id: Uuid, id: Uuid) -> Result<Option<PaymentMethod>, sqlx::Error> {
-    sqlx::query_as(concat!("SELECT ", method_columns!(), " FROM payment_methods WHERE id = $1 AND user_id = $2"))
-        .bind(id)
-        .bind(user_id)
-        .fetch_optional(db)
-        .await
+pub async fn find_card(
+    db: &PgPool,
+    user_id: Uuid,
+    id: Uuid,
+) -> Result<Option<PaymentMethod>, sqlx::Error> {
+    sqlx::query_as(concat!(
+        "SELECT ",
+        method_columns!(),
+        " FROM payment_methods WHERE id = $1 AND user_id = $2"
+    ))
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(db)
+    .await
 }
 
 /// One pass of this user, or None.
-pub async fn find_pass(db: &PgPool, user_id: Uuid, id: Uuid) -> Result<Option<PassRow>, sqlx::Error> {
-    sqlx::query_as(concat!("SELECT ", pass_columns!(), " FROM passes WHERE id = $1 AND user_id = $2"))
-        .bind(id)
-        .bind(user_id)
-        .fetch_optional(db)
-        .await
+pub async fn find_pass(
+    db: &PgPool,
+    user_id: Uuid,
+    id: Uuid,
+) -> Result<Option<PassRow>, sqlx::Error> {
+    sqlx::query_as(concat!(
+        "SELECT ",
+        pass_columns!(),
+        " FROM passes WHERE id = $1 AND user_id = $2"
+    ))
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(db)
+    .await
 }
 
 /// The card the user added first, or None if the user has no card.
 pub async fn first_card(db: &PgPool, user_id: Uuid) -> Result<Option<PaymentMethod>, sqlx::Error> {
-    sqlx::query_as(concat!("SELECT ", method_columns!(), " FROM payment_methods WHERE user_id = $1 ORDER BY id LIMIT 1"))
-        .bind(user_id)
-        .fetch_optional(db)
-        .await
+    sqlx::query_as(concat!(
+        "SELECT ",
+        method_columns!(),
+        " FROM payment_methods WHERE user_id = $1 ORDER BY id LIMIT 1"
+    ))
+    .bind(user_id)
+    .fetch_optional(db)
+    .await
 }
 
 /// One pass product of the catalog, or None.

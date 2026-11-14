@@ -25,15 +25,26 @@ const MAX_PHONE_DIGITS: usize = 15;
 /// digits, no spaces. Spaces, dashes, dots and brackets are dropped. The number must be international
 /// (start with `+`, not `0`) and have 8 to 15 digits. Anything else is a 400.
 pub fn normalize_phone(phone: &str) -> Result<String, AppError> {
-    let invalid = || AppError::Validation("phone must be an international number such as +40712345678.".to_string());
+    let invalid = || {
+        AppError::Validation(
+            "phone must be an international number such as +40712345678.".to_string(),
+        )
+    };
 
     let trimmed = phone.trim();
     let digits = trimmed.strip_prefix('+').ok_or_else(invalid)?;
-    let digits: String = digits.chars().filter(|c| !matches!(c, ' ' | '-' | '.' | '(' | ')')).collect();
+    let digits: String = digits
+        .chars()
+        .filter(|c| !matches!(c, ' ' | '-' | '.' | '(' | ')'))
+        .collect();
     let well_formed = digits.chars().all(|c| c.is_ascii_digit())
         && !digits.starts_with('0')
         && (MIN_PHONE_DIGITS..=MAX_PHONE_DIGITS).contains(&digits.len());
-    if well_formed { Ok(format!("+{digits}")) } else { Err(invalid()) }
+    if well_formed {
+        Ok(format!("+{digits}"))
+    } else {
+        Err(invalid())
+    }
 }
 
 /// A code typed by the user: trimmed, exactly 6 digits.

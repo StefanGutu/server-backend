@@ -8,7 +8,11 @@ use super::models::{ChargeRow, ChargeStatus, NewCharge, TicketKey};
 pub type Cursor = (DateTime<Utc>, Uuid);
 
 /// The place of one of the user's charges in the list, or None if the user has no such charge.
-pub async fn find_cursor(db: &PgPool, user_id: Uuid, charge_id: Uuid) -> Result<Option<Cursor>, sqlx::Error> {
+pub async fn find_cursor(
+    db: &PgPool,
+    user_id: Uuid,
+    charge_id: Uuid,
+) -> Result<Option<Cursor>, sqlx::Error> {
     sqlx::query_as("SELECT started_at, id FROM charges WHERE id = $1 AND user_id = $2")
         .bind(charge_id)
         .bind(user_id)
@@ -63,7 +67,12 @@ pub async fn list_keys(db: &PgPool) -> Result<Vec<TicketKey>, sqlx::Error> {
 }
 
 /// Stores a charge with its ticket token.
-pub async fn insert_charge(db: &PgPool, id: Uuid, new: &NewCharge, qr_token: &str) -> Result<ChargeRow, sqlx::Error> {
+pub async fn insert_charge(
+    db: &PgPool,
+    id: Uuid,
+    new: &NewCharge,
+    qr_token: &str,
+) -> Result<ChargeRow, sqlx::Error> {
     sqlx::query_as(
         "INSERT INTO charges (id, user_id, session_id, line, destination, amount_bani, status, paid_with,
                               passengers, started_at, ended_at, qr_token)
@@ -88,7 +97,11 @@ pub async fn insert_charge(db: &PgPool, id: Uuid, new: &NewCharge, qr_token: &st
 }
 
 /// The newest charge of a ride, or None.
-pub async fn find_by_session(db: &PgPool, user_id: Uuid, session_id: Uuid) -> Result<Option<ChargeRow>, sqlx::Error> {
+pub async fn find_by_session(
+    db: &PgPool,
+    user_id: Uuid,
+    session_id: Uuid,
+) -> Result<Option<ChargeRow>, sqlx::Error> {
     sqlx::query_as(
         "SELECT id, user_id, session_id, line, destination, amount_bani, status, paid_with,
                 passengers, started_at, ended_at, qr_token
@@ -130,7 +143,10 @@ pub async fn complete_for_session(db: &PgPool, session_id: Uuid) -> Result<u64, 
 
 /// The status of a charge, or None if there is no such charge. Any charge: the inspector checks
 /// tickets of other users.
-pub async fn find_charge_status(db: &PgPool, charge_id: Uuid) -> Result<Option<ChargeStatus>, sqlx::Error> {
+pub async fn find_charge_status(
+    db: &PgPool,
+    charge_id: Uuid,
+) -> Result<Option<ChargeStatus>, sqlx::Error> {
     sqlx::query_scalar("SELECT status FROM charges WHERE id = $1")
         .bind(charge_id)
         .fetch_optional(db)

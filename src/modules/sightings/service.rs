@@ -15,6 +15,7 @@ use crate::{
     error::AppError,
     modules::{
         devices,
+        extras::notifications::push::PushSender,
         rides::{
             self,
             models::{BusEvidence, RideReply},
@@ -36,11 +37,18 @@ const TOKEN_BYTES: usize = 16;
 /// A wrong shape is a 400 (a wrong token is a 422, see `check_token`).
 pub fn validate(s: &Sighting) -> Result<(), AppError> {
     if !(0..=65535).contains(&s.bus_id) {
-        return Err(AppError::Validation("bus_id must be between 0 and 65535.".into()));
+        return Err(AppError::Validation(
+            "bus_id must be between 0 and 65535.".into(),
+        ));
     }
-    let lowercase_hex = s.token.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+    let lowercase_hex = s
+        .token
+        .bytes()
+        .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
     if s.token.len() != TOKEN_BYTES * 2 || !lowercase_hex {
-        return Err(AppError::Validation("token must be 32 lowercase hex characters.".into()));
+        return Err(AppError::Validation(
+            "token must be 32 lowercase hex characters.".into(),
+        ));
     }
     Ok(())
 }
@@ -60,7 +68,8 @@ pub fn check_token(secret: &str, bus_id: i32, slot: i64, token_hex: &str, now: i
     if token.len() != TOKEN_BYTES {
         return false;
     }
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
     mac.update(format!("{bus_id}.{slot}").as_bytes());
     mac.verify_truncated_left(&token).is_ok()
 }
@@ -70,8 +79,21 @@ pub fn check_token(secret: &str, bus_id: i32, slot: i64, token_hex: &str, now: i
 const LOOKBACK_SLOTS: i64 = 120;
 
 /// The newest slot in which the user heard this bus, or None if never.
-pub async fn last_heard_slot(db: &PgPool, user_id: Uuid, bus_id: i32) -> Result<Option<i64>, AppError> {
+pub async fn last_heard_slot(
+    db: &PgPool,
+    user_id: Uuid,
+    bus_id: i32,
+) -> Result<Option<i64>, AppError> {
     Ok(repo::last_slot(db, user_id, bus_id).await?)
+}
+
+/// The buses the user heard from this unix time on (each bus once).
+pub async fn recent_bus_ids(
+    db: &PgPool,
+    user_id: Uuid,
+    since_epoch: i64,
+) -> Result<Vec<i32>, AppError> {
+    Ok(repo::recent_bus_ids(db, user_id, since_epoch / SLOT_SECS).await?)
 }
 
 /// The newest slot in which the user heard any bus, or None if never.
@@ -82,10 +104,30 @@ pub async fn last_heard_any_slot(db: &PgPool, user_id: Uuid) -> Result<Option<i6
 /// POST /rides/manual: the user says "I am on the bus". The buses heard in the last 2 minutes (the
 /// slots a token is still accepted for) decide which bus it is; with none it is a 422. The ride
 /// itself is changed by `rides`.
-pub async fn manual_ride(db: &PgPool, user_id: Uuid) -> Result<RideReply, AppError> {
+pub async fn manual_ride(
+    db: &PgPool,
+    push: &PushSender,
+    user_id: Uuid,
+) -> Result<RideReply, AppError> {
     let since_slot = chrono::Utc::now().timestamp() / SLOT_SECS - MAX_SLOTS_OLD;
     let heard = repo::recent_bus_ids(db, user_id, since_slot).await?;
-    rides::service::start_manual_ride(db, user_id, &heard).await
+    rides::service::start_manual_ride(db, push, user_id, &heard).await
+}
+
+/// The time the user was heard near this bus in their latest run of slots in a row: from the start of the first
+/// slot to the end of the last one (unix seconds). None if they were never heard near it. This is the time
+/// the user spent on the bus (`LOOKBACK_SLOTS` is as far back as a run is followed).
+pub async fn ride_window(
+    db: &PgPool,
+    user_id: Uuid,
+    bus_id: i32,
+) -> Result<Option<(i64, i64)>, AppError> {
+    let since_slot = chrono::Utc::now().timestamp() / SLOT_SECS - LOOKBACK_SLOTS;
+    let heard = repo::recent_sightings(db, user_id, since_slot).await?;
+    let run = runs_by_bus(&heard)
+        .into_iter()
+        .find(|run| run.bus_id == bus_id);
+    Ok(run.map(|run| (run.started_at, (run.last_slot + 1) * SLOT_SECS)))
 }
 
 /// Groups (bus_id, slot) pairs by bus and finds, for each bus, the run of slots in a row that
@@ -116,12 +158,19 @@ pub fn runs_by_bus(heard: &[(i32, i64)]) -> Vec<BusEvidence> {
 
 /// What the user heard lately, with how far each bus moved while they heard it.
 /// Only runs long enough to count get the (more expensive) movement lookup.
-async fn gather_evidence(db: &PgPool, user_id: Uuid, allow_sim: bool) -> Result<Vec<BusEvidence>, AppError> {
+async fn gather_evidence(
+    db: &PgPool,
+    user_id: Uuid,
+    allow_sim: bool,
+) -> Result<Vec<BusEvidence>, AppError> {
     let since_slot = chrono::Utc::now().timestamp() / SLOT_SECS - LOOKBACK_SLOTS;
     let heard = repo::recent_sightings(db, user_id, since_slot).await?;
 
     let mut evidence = runs_by_bus(&heard);
-    for e in evidence.iter_mut().filter(|e| e.run_len >= rides::service::REQUIRED_SLOTS) {
+    for e in evidence
+        .iter_mut()
+        .filter(|e| e.run_len >= rides::service::REQUIRED_SLOTS)
+    {
         let (from, to) = (e.started_at, (e.last_slot + 1) * SLOT_SECS);
         e.moved_m = telemetry::service::bus_movement_m(db, e.bus_id, from, to, allow_sim).await?;
     }
@@ -131,7 +180,13 @@ async fn gather_evidence(db: &PgPool, user_id: Uuid, allow_sim: bool) -> Result<
 /// Whole flow: validate, check the phone clock, check the token with the bus's beacon
 /// secret, store, then update the ride. A sighting that was already stored is still accepted.
 /// `allow_sim`: simulator telemetry may count as bus movement (test mode only).
-pub async fn handle(db: &PgPool, user_id: Uuid, s: &Sighting, allow_sim: bool) -> Result<Outcome, AppError> {
+pub async fn handle(
+    db: &PgPool,
+    push: &PushSender,
+    user_id: Uuid,
+    s: &Sighting,
+    allow_sim: bool,
+) -> Result<Outcome, AppError> {
     validate(s)?;
     if !s.clock_synced {
         return Ok(Outcome::Rejected);
@@ -140,12 +195,18 @@ pub async fn handle(db: &PgPool, user_id: Uuid, s: &Sighting, allow_sim: bool) -
     let Some(secret) = devices::service::beacon_secret(db, s.bus_id).await? else {
         return Ok(Outcome::Rejected);
     };
-    if !check_token(&secret, s.bus_id, s.slot, &s.token, chrono::Utc::now().timestamp()) {
+    if !check_token(
+        &secret,
+        s.bus_id,
+        s.slot,
+        &s.token,
+        chrono::Utc::now().timestamp(),
+    ) {
         return Ok(Outcome::Rejected);
     }
     repo::insert_if_new(db, user_id, s).await?;
 
     let evidence = gather_evidence(db, user_id, allow_sim).await?;
-    let status = rides::service::update_from_sightings(db, user_id, &evidence).await?;
+    let status = rides::service::update_from_sightings(db, push, user_id, &evidence).await?;
     Ok(Outcome::Accepted(status))
 }

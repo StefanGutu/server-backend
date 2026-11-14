@@ -1,11 +1,11 @@
 //! Helpers shared by every module's extractors and routes.
 
-use chrono::{DateTime, SecondsFormat, Utc};
 use axum::{
     body::Bytes,
     extract::{FromRequest, FromRequestParts, Path, Query, Request},
     http::{HeaderMap, request::Parts},
 };
+use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serializer, de::DeserializeOwned};
 use uuid::Uuid;
 
@@ -60,7 +60,9 @@ pub fn required_header<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str
     let value = headers
         .get(name)
         .ok_or_else(|| AppError::Validation(format!("The {name} header is required.")))?;
-    value.to_str().map_err(|_| AppError::Validation(format!("The {name} header must be text.")))
+    value
+        .to_str()
+        .map_err(|_| AppError::Validation(format!("The {name} header must be text.")))
 }
 
 /// Reads a header as text, or `AUTH_INVALID` if it is missing or not text.
@@ -86,7 +88,10 @@ pub fn utc_seconds<S: Serializer>(time: &DateTime<Utc>, serializer: S) -> Result
 
 /// Same as `utc_seconds` for a date that may be missing (`Option`). Use it with
 /// `skip_serializing_if = "Option::is_none"` so a missing date is left out.
-pub fn utc_seconds_opt<S: Serializer>(time: &Option<DateTime<Utc>>, serializer: S) -> Result<S::Ok, S::Error> {
+pub fn utc_seconds_opt<S: Serializer>(
+    time: &Option<DateTime<Utc>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
     match time {
         Some(time) => utc_seconds(time, serializer),
         None => serializer.serialize_none(),
@@ -131,7 +136,9 @@ impl ListQuery {
     pub fn page_size(&self) -> Result<i64, AppError> {
         match self.limit {
             None => Ok(DEFAULT_PAGE_SIZE),
-            Some(limit) if limit < 1 => Err(AppError::Validation("limit must be 1 or more.".to_string())),
+            Some(limit) if limit < 1 => {
+                Err(AppError::Validation("limit must be 1 or more.".to_string()))
+            }
             Some(limit) => Ok(limit.min(MAX_PAGE_SIZE)),
         }
     }

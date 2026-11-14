@@ -21,7 +21,8 @@ async fn post_frame(
     headers: HeaderMap,
     signed: SignedRequest, // must be last: it reads the body
 ) -> Result<Json<NextCapture>, AppError> {
-    let answer = service::store_frame(&state.db, &signed.device, bus_id, &headers, &signed.body).await?;
+    let answer =
+        service::store_frame(&state.db, &signed.device, bus_id, &headers, &signed.body).await?;
     Ok(Json(answer))
 }
 

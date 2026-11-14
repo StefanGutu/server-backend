@@ -4,16 +4,16 @@ use chrono::{DateTime, Duration, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+#[cfg(feature = "phone-login")]
+use super::otp;
 use super::{
     id_token::IdTokenVerifier,
     models::{
-        Identity, Linked, LinkInput, LoginReply, Me, NewRefreshToken, PatchMe, Provider, RefreshTokenRow,
-        RefreshTokenState, SigninInput, Tier, TokenReply, User, UserRole,
+        Identity, LinkInput, Linked, LoginReply, Me, NewRefreshToken, PatchMe, Provider,
+        RefreshTokenRow, RefreshTokenState, SigninInput, Tier, TokenReply, User, UserRole,
     },
     repo, token,
 };
-#[cfg(feature = "phone-login")]
-use super::otp;
 use crate::error::AppError;
 
 /// Fixed "namespace" for turning test ids into uuids. Never change it: the same
@@ -50,31 +50,64 @@ pub async fn user_from_test_header(db: &PgPool, header: &str) -> Result<User, Ap
 
 /// The user behind an `Authorization: Bearer <accessToken>` header. `AUTH_INVALID` when the header
 /// has another shape, the token is not ours or has expired, or the user was deleted.
-pub async fn user_from_authorization(db: &PgPool, jwt_secret: &str, header: &str) -> Result<User, AppError> {
+pub async fn user_from_authorization(
+    db: &PgPool,
+    jwt_secret: &str,
+    header: &str,
+) -> Result<User, AppError> {
     let access_token = token::bearer_token(header).ok_or(AppError::AuthInvalid)?;
-    let user_id = token::verify_access(jwt_secret, access_token, Utc::now().timestamp()).ok_or(AppError::AuthInvalid)?;
-    repo::find_user(db, user_id).await?.ok_or(AppError::AuthInvalid)
+    let user_id = token::verify_access(jwt_secret, access_token, Utc::now().timestamp())
+        .ok_or(AppError::AuthInvalid)?;
+    repo::find_user(db, user_id)
+        .await?
+        .ok_or(AppError::AuthInvalid)
 }
 
 /// A new pair of tokens for this user: the reply for the app, and the hash and the end of the
 /// refresh token for the database. Pure apart from the random bytes.
-fn new_tokens(jwt_secret: &str, user_id: Uuid, now: DateTime<Utc>) -> Result<(TokenReply, String, DateTime<Utc>), AppError> {
+fn new_tokens(
+    jwt_secret: &str,
+    user_id: Uuid,
+    now: DateTime<Utc>,
+) -> Result<(TokenReply, String, DateTime<Utc>), AppError> {
     let refresh_token = token::new_refresh_token()?;
     let token_hash = token::hash_refresh_token(&refresh_token);
-    let access_token = token::sign_access(jwt_secret, &token::AccessClaims::new(user_id, now.timestamp()))?;
-    let reply = TokenReply { user_id, access_token, refresh_token, expires_in: token::ACCESS_TOKEN_SECS };
-    Ok((reply, token_hash, now + Duration::seconds(token::REFRESH_TOKEN_SECS)))
+    let access_token = token::sign_access(
+        jwt_secret,
+        &token::AccessClaims::new(user_id, now.timestamp()),
+    )?;
+    let reply = TokenReply {
+        user_id,
+        access_token,
+        refresh_token,
+        expires_in: token::ACCESS_TOKEN_SECS,
+    };
+    Ok((
+        reply,
+        token_hash,
+        now + Duration::seconds(token::REFRESH_TOKEN_SECS),
+    ))
 }
 
 /// POST /auth/anonymous: a new anonymous user (tier `anonymous`) with their first tokens. Every
 /// call makes a new user: `deviceId` is not a secret, so it never gives access to an existing
 /// user. It only says which phone the login belongs to.
-pub async fn login_anonymous(db: &PgPool, jwt_secret: &str, device_id: &str) -> Result<TokenReply, AppError> {
+pub async fn login_anonymous(
+    db: &PgPool,
+    jwt_secret: &str,
+    device_id: &str,
+) -> Result<TokenReply, AppError> {
     let device_id = token::clean_device_id(device_id)?;
     let user_id = Uuid::new_v4();
     let (reply, token_hash, expires_at) = new_tokens(jwt_secret, user_id, Utc::now())?;
 
-    let first_token = NewRefreshToken { id: Uuid::now_v7(), user_id, device_id, token_hash: &token_hash, expires_at };
+    let first_token = NewRefreshToken {
+        id: Uuid::now_v7(),
+        user_id,
+        device_id,
+        token_hash: &token_hash,
+        expires_at,
+    };
     repo::insert_anonymous_user(db, &first_token).await?;
     tracing::info!(%user_id, "anonymous user created");
     Ok(reply)
@@ -103,9 +136,15 @@ async fn revoke_device(db: &PgPool, row: &RefreshTokenRow) -> Result<(), AppErro
 /// POST /auth/refresh: exchanges a refresh token for a new access token and a new refresh token.
 /// The old refresh token stops working (it is used once). `AUTH_INVALID` for a token that is
 /// unknown, expired or already used; an already used one also revokes the logins of its device.
-pub async fn refresh(db: &PgPool, jwt_secret: &str, refresh_token: &str) -> Result<TokenReply, AppError> {
+pub async fn refresh(
+    db: &PgPool,
+    jwt_secret: &str,
+    refresh_token: &str,
+) -> Result<TokenReply, AppError> {
     let old_hash = token::hash_refresh_token(refresh_token.trim());
-    let row = repo::find_refresh_token(db, &old_hash).await?.ok_or(AppError::AuthInvalid)?;
+    let row = repo::find_refresh_token(db, &old_hash)
+        .await?
+        .ok_or(AppError::AuthInvalid)?;
 
     let now = Utc::now();
     match refresh_token_state(&row, now) {
@@ -164,24 +203,40 @@ pub async fn delete_me(db: &PgPool, user_id: Uuid) -> Result<(), AppError> {
 }
 
 /// Makes a wallet item (card or pass) the default way to pay. The caller checked it is the user's.
-pub async fn set_default_source(db: &PgPool, user_id: Uuid, source_id: Uuid) -> Result<(), AppError> {
+pub async fn set_default_source(
+    db: &PgPool,
+    user_id: Uuid,
+    source_id: Uuid,
+) -> Result<(), AppError> {
     Ok(repo::set_default_source(db, user_id, Some(source_id)).await?)
 }
 
 /// A wallet item was deleted: if it was the default way to pay, there is no default any more.
-pub async fn clear_default_source_if(db: &PgPool, user_id: Uuid, source_id: Uuid) -> Result<(), AppError> {
+pub async fn clear_default_source_if(
+    db: &PgPool,
+    user_id: Uuid,
+    source_id: Uuid,
+) -> Result<(), AppError> {
     Ok(repo::clear_default_source_if(db, user_id, source_id).await?)
 }
 
 /// A new wallet item becomes the default way to pay if the user has no default yet.
-pub async fn set_default_source_if_none(db: &PgPool, user_id: Uuid, source_id: Uuid) -> Result<(), AppError> {
+pub async fn set_default_source_if_none(
+    db: &PgPool,
+    user_id: Uuid,
+    source_id: Uuid,
+) -> Result<(), AppError> {
     Ok(repo::set_default_source_if_none(db, user_id, source_id).await?)
 }
 
 /// Only an inspector may check tickets: anyone else is 403 `FORBIDDEN`. The role is set by hand
 /// (`users.role`); nothing in the app gives it.
 pub fn require_inspector(user: &User) -> Result<(), AppError> {
-    if user.role == UserRole::Inspector { Ok(()) } else { Err(AppError::Forbidden) }
+    if user.role == UserRole::Inspector {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden)
+    }
 }
 
 /// POST /auth/logout: the refresh tokens of the user stop working, so the app cannot get new access
@@ -244,7 +299,9 @@ pub async fn start_otp(db: &PgPool, phone: &str) -> Result<(), AppError> {
 #[cfg(feature = "phone-login")]
 async fn verify_code(db: &PgPool, phone: &str, code: &str) -> Result<(), AppError> {
     let code = otp::clean_code(code)?;
-    let stored = repo::use_otp_attempt(db, phone, otp::MAX_ATTEMPTS).await?.ok_or_else(code_error)?;
+    let stored = repo::use_otp_attempt(db, phone, otp::MAX_ATTEMPTS)
+        .await?
+        .ok_or_else(code_error)?;
     if stored != otp::hash_code(phone, code) {
         tracing::info!(%phone, "wrong phone code");
         return Err(code_error());
@@ -258,7 +315,11 @@ async fn verify_code(db: &PgPool, phone: &str, code: &str) -> Result<(), AppErro
 
 /// The phone number the caller proved to own (the subject of a `phone` identity).
 #[cfg(feature = "phone-login")]
-async fn phone_subject(db: &PgPool, phone: Option<&str>, code: Option<&str>) -> Result<String, AppError> {
+async fn phone_subject(
+    db: &PgPool,
+    phone: Option<&str>,
+    code: Option<&str>,
+) -> Result<String, AppError> {
     let phone = phone.ok_or_else(|| AppError::Validation("phone is required.".to_string()))?;
     let code = code.ok_or_else(|| AppError::Validation("code is required.".to_string()))?;
     let phone = otp::normalize_phone(phone)?;
@@ -268,8 +329,14 @@ async fn phone_subject(db: &PgPool, phone: Option<&str>, code: Option<&str>) -> 
 
 /// Login with a phone is switched off (no SMS provider): `provider` `phone` is refused.
 #[cfg(not(feature = "phone-login"))]
-async fn phone_subject(_db: &PgPool, _phone: Option<&str>, _code: Option<&str>) -> Result<String, AppError> {
-    Err(AppError::Validation("Login with a phone number is switched off.".to_string()))
+async fn phone_subject(
+    _db: &PgPool,
+    _phone: Option<&str>,
+    _code: Option<&str>,
+) -> Result<String, AppError> {
+    Err(AppError::Validation(
+        "Login with a phone number is switched off.".to_string(),
+    ))
 }
 
 // ---- link and sign in, for every provider ----
@@ -286,7 +353,8 @@ async fn proven_subject(
 ) -> Result<String, AppError> {
     match provider {
         Provider::Google | Provider::Apple => {
-            let id_token = id_token.ok_or_else(|| AppError::Validation("idToken is required.".to_string()))?;
+            let id_token =
+                id_token.ok_or_else(|| AppError::Validation("idToken is required.".to_string()))?;
             verifier.verify(provider, id_token).await
         }
         Provider::Phone => phone_subject(db, phone, code).await,
@@ -295,11 +363,28 @@ async fn proven_subject(
 
 /// New tokens for a user on a device, stored, in the shape of link and sign-in: `userId`, `tier`,
 /// `accessToken`, `refreshToken`.
-async fn issue_login(db: &PgPool, jwt_secret: &str, user_id: Uuid, tier: Tier, device_id: &str) -> Result<LoginReply, AppError> {
+async fn issue_login(
+    db: &PgPool,
+    jwt_secret: &str,
+    user_id: Uuid,
+    tier: Tier,
+    device_id: &str,
+) -> Result<LoginReply, AppError> {
     let (reply, token_hash, expires_at) = new_tokens(jwt_secret, user_id, Utc::now())?;
-    let new = NewRefreshToken { id: Uuid::now_v7(), user_id, device_id, token_hash: &token_hash, expires_at };
+    let new = NewRefreshToken {
+        id: Uuid::now_v7(),
+        user_id,
+        device_id,
+        token_hash: &token_hash,
+        expires_at,
+    };
     repo::insert_refresh_token(db, &new).await?;
-    Ok(LoginReply { user_id, tier, access_token: reply.access_token, refresh_token: reply.refresh_token })
+    Ok(LoginReply {
+        user_id,
+        tier,
+        access_token: reply.access_token,
+        refresh_token: reply.refresh_token,
+    })
 }
 
 /// POST /auth/link: the logged-in user proves who they are at a provider (an `idToken` from Google or
@@ -325,11 +410,20 @@ pub async fn link(
 
     match repo::link_identity(db, user.id, input.provider, &subject).await? {
         Linked::InUse => return Err(AppError::IdentityInUse),
-        Linked::New => tracing::info!(user_id = %user.id, provider = ?input.provider, "identity linked: the user is an account now"),
+        Linked::New => {
+            tracing::info!(user_id = %user.id, provider = ?input.provider, "identity linked: the user is an account now")
+        }
         Linked::AlreadyTheirs => {}
     }
     let device = repo::latest_device_of(db, user.id).await?;
-    issue_login(db, jwt_secret, user.id, Tier::Account, device.as_deref().unwrap_or(UNKNOWN_DEVICE)).await
+    issue_login(
+        db,
+        jwt_secret,
+        user.id,
+        Tier::Account,
+        device.as_deref().unwrap_or(UNKNOWN_DEVICE),
+    )
+    .await
 }
 
 /// Logs in to the account that owns this identity, on this device. `None` when nobody owns it.
@@ -343,16 +437,22 @@ async fn login_to_owner(
     let Some(owner) = repo::find_identity_owner(db, provider, subject).await? else {
         return Ok(None);
     };
-    let user = repo::find_user(db, owner).await?.ok_or(AppError::NotFound)?;
+    let user = repo::find_user(db, owner)
+        .await?
+        .ok_or(AppError::NotFound)?;
     tracing::info!(user_id = %user.id, ?provider, "signed in with an identity");
-    Ok(Some(issue_login(db, jwt_secret, user.id, user.tier, device_id).await?))
+    Ok(Some(
+        issue_login(db, jwt_secret, user.id, user.tier, device_id).await?,
+    ))
 }
 
 /// The anonymous user who is left behind by a sign-in, if there is one: the caller, when they proved who
 /// they are (a good `Bearer` token), are `anonymous`, and are not the user they signed in as. An account is
 /// never abandoned. Pure.
 pub fn abandoned_anonymous(caller: Option<&User>, signed_in_as: Uuid) -> Option<Uuid> {
-    caller.filter(|user| user.tier == Tier::Anonymous && user.id != signed_in_as).map(|user| user.id)
+    caller
+        .filter(|user| user.tier == Tier::Anonymous && user.id != signed_in_as)
+        .map(|user| user.id)
 }
 
 /// An anonymous user nobody can reach any more: the user and everything they had (cards, passes, rides,
@@ -360,7 +460,9 @@ pub fn abandoned_anonymous(caller: Option<&User>, signed_in_as: Uuid) -> Option<
 /// does not fail the call that led here: the person is already signed in or out.
 async fn abandon_anonymous_user(db: &PgPool, user_id: Uuid, why: &str) {
     match repo::delete_user(db, user_id).await {
-        Ok(true) => tracing::warn!(%user_id, why, "anonymous user abandoned: the user and everything they had were deleted"),
+        Ok(true) => {
+            tracing::warn!(%user_id, why, "anonymous user abandoned: the user and everything they had were deleted")
+        }
         Ok(false) => {}
         Err(e) => tracing::error!(%user_id, why, "cannot delete an abandoned anonymous user: {e}"),
     }
@@ -383,7 +485,9 @@ pub async fn signin(
 ) -> Result<LoginReply, AppError> {
     let reply = signin_identity(db, jwt_secret, verifier, input).await?;
     match abandoned_anonymous(caller, reply.user_id) {
-        Some(anonymous_id) => abandon_anonymous_user(db, anonymous_id, "signed in to an account").await,
+        Some(anonymous_id) => {
+            abandon_anonymous_user(db, anonymous_id, "signed in to an account").await
+        }
         None if caller.is_none() => tracing::info!(
             user_id = %reply.user_id,
             "signed in without a login: an anonymous user of this phone, if there is one, is not deleted (nothing proves it is theirs)"
@@ -411,20 +515,34 @@ async fn signin_identity(
     )
     .await?;
 
-    if let Some(reply) = login_to_owner(db, jwt_secret, input.provider, &subject, device_id).await? {
+    if let Some(reply) = login_to_owner(db, jwt_secret, input.provider, &subject, device_id).await?
+    {
         return Ok(reply);
     }
 
     // Nobody owns this identity yet: make the account, with its first tokens.
     let user_id = Uuid::new_v4();
     let (reply, token_hash, expires_at) = new_tokens(jwt_secret, user_id, Utc::now())?;
-    let first_token = NewRefreshToken { id: Uuid::now_v7(), user_id, device_id, token_hash: &token_hash, expires_at };
+    let first_token = NewRefreshToken {
+        id: Uuid::now_v7(),
+        user_id,
+        device_id,
+        token_hash: &token_hash,
+        expires_at,
+    };
     if repo::create_account_with_identity(db, input.provider, &subject, &first_token).await? {
         tracing::info!(%user_id, provider = ?input.provider, "account made by a first sign-in");
-        return Ok(LoginReply { user_id, tier: Tier::Account, access_token: reply.access_token, refresh_token: reply.refresh_token });
+        return Ok(LoginReply {
+            user_id,
+            tier: Tier::Account,
+            access_token: reply.access_token,
+            refresh_token: reply.refresh_token,
+        });
     }
     // Another request made it between our look and our write: log in to that one.
-    login_to_owner(db, jwt_secret, input.provider, &subject, device_id).await?.ok_or(AppError::Server)
+    login_to_owner(db, jwt_secret, input.provider, &subject, device_id)
+        .await?
+        .ok_or(AppError::Server)
 }
 
 /// Background clean-up: forgets the phone codes whose time has passed. Returns how many.

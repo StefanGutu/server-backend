@@ -5,12 +5,13 @@ pub mod error;
 pub mod extract;
 pub mod logging;
 pub mod modules;
+pub mod rate_limit;
 pub mod state;
 pub mod tasks;
 
 use axum::{Json, Router, routing::get};
-use serde_json::{Value, json};
 use error::AppError;
+use serde_json::{Value, json};
 use state::AppState;
 use tower_http::trace::TraceLayer;
 
@@ -27,9 +28,12 @@ async fn not_found() -> AppError {
 pub fn app(state: AppState) -> Router {
     let api = Router::new()
         .route("/health", get(health))
-        .merge(modules::auth::routes::router())
+        .merge(modules::auth::routes::router(state.clone()))
         .merge(modules::charges::routes::router())
         .merge(modules::devices::routes::router())
+        .merge(modules::extras::notifications::routes::router())
+        .merge(modules::extras::reports::routes::router())
+        .merge(modules::extras::trips::routes::router())
         .merge(modules::frames::routes::router())
         .merge(modules::rides::routes::router())
         .merge(modules::sightings::routes::router())

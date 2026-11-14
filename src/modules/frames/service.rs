@@ -23,8 +23,13 @@ pub const MAX_FRAME_BYTES: usize = 2 * 1024 * 1024;
 /// What the camera is told after each photo: wait 3 seconds. Must be 1000 to 60000 (server.md).
 pub const NEXT_CAPTURE_MS: u32 = 3000;
 
-/// The folder the photos are saved in, under the folder the server runs in (`data/` is not in git).
-const FRAMES_DIR: &str = "data/frames";
+/// The folder the photos are saved in, next to the code (`photos/` is not in git). One folder per bus.
+pub const PHOTOS_DIR: &str = "photos";
+
+/// How many photos are kept for each bus: the newest 1000. When a bus has more, the oldest are deleted
+/// (the file and the row), so a camera that sends a photo every 3 seconds cannot fill the disk.
+/// 1000 photos is about 50 minutes of a camera that shoots every 3 seconds.
+pub const MAX_PHOTOS_PER_BUS: i64 = 1000;
 
 fn invalid(message: String) -> AppError {
     AppError::Validation(message)
@@ -51,21 +56,36 @@ fn frame_size(text: &str) -> Option<(u32, u32)> {
 /// does not send the photo again. Pure.
 pub fn parse_meta(headers: &HeaderMap, url_bus_id: i32) -> Result<FrameMeta, AppError> {
     let content_type = required_header(headers, "Content-Type")?;
-    if !content_type.split(';').next().is_some_and(|t| t.trim().eq_ignore_ascii_case("image/jpeg")) {
+    if !content_type
+        .split(';')
+        .next()
+        .is_some_and(|t| t.trim().eq_ignore_ascii_case("image/jpeg"))
+    {
         return Err(invalid("Content-Type must be image/jpeg.".to_string()));
     }
     let bus_id: i32 = number(headers, "X-Bus-Id")?;
     if bus_id != url_bus_id {
-        return Err(invalid("X-Bus-Id is not the bus of the request.".to_string()));
+        return Err(invalid(
+            "X-Bus-Id is not the bus of the request.".to_string(),
+        ));
     }
     let seq: i64 = number(headers, "X-Frame-Seq")?;
     let capture_ts: i64 = number(headers, "X-Capture-Ts")?;
     if seq < 0 || capture_ts < 0 {
-        return Err(invalid("X-Frame-Seq and X-Capture-Ts must not be negative.".to_string()));
+        return Err(invalid(
+            "X-Frame-Seq and X-Capture-Ts must not be negative.".to_string(),
+        ));
     }
     let size = required_header(headers, "X-Frame-Size")?;
-    let (width, height) = frame_size(size).ok_or_else(|| invalid("X-Frame-Size must look like 800x600.".to_string()))?;
-    Ok(FrameMeta { route_id: number(headers, "X-Route-Id")?, seq, capture_ts, width, height })
+    let (width, height) = frame_size(size)
+        .ok_or_else(|| invalid("X-Frame-Size must look like 800x600.".to_string()))?;
+    Ok(FrameMeta {
+        route_id: number(headers, "X-Route-Id")?,
+        seq,
+        capture_ts,
+        width,
+        height,
+    })
 }
 
 /// The body must be a JPEG: not empty, not over `MAX_FRAME_BYTES`, and it starts with the JPEG marker
@@ -75,7 +95,9 @@ pub fn check_jpeg(body: &[u8]) -> Result<(), AppError> {
         return Err(invalid("The photo is empty.".to_string()));
     }
     if body.len() > MAX_FRAME_BYTES {
-        return Err(invalid(format!("The photo is bigger than {MAX_FRAME_BYTES} bytes.")));
+        return Err(invalid(format!(
+            "The photo is bigger than {MAX_FRAME_BYTES} bytes."
+        )));
     }
     if !body.starts_with(&[0xFF, 0xD8, 0xFF]) {
         return Err(invalid("The body is not a JPEG.".to_string()));
@@ -85,7 +107,7 @@ pub fn check_jpeg(body: &[u8]) -> Result<(), AppError> {
 
 /// Where the photo `id` of this bus is saved. One folder per bus, one file per photo. Pure.
 pub fn frame_path(bus_id: i32, id: Uuid) -> String {
-    format!("{FRAMES_DIR}/{bus_id}/{id}.jpg")
+    format!("{PHOTOS_DIR}/{bus_id}/{id}.jpg")
 }
 
 /// POST /buses/{bus_id}/frames: checks that the camera of this bus sent it, saves the JPEG to disk,
@@ -112,7 +134,41 @@ pub async fn store_frame(
         return Err(e.into());
     }
     tracing::debug!(bus_id = url_bus_id, seq = meta.seq, bytes = body.len(), size = %format!("{}x{}", meta.width, meta.height), "photo stored");
-    Ok(NextCapture { next_capture_ms: NEXT_CAPTURE_MS })
+    delete_old_photos(db, url_bus_id).await;
+    Ok(NextCapture {
+        next_capture_ms: NEXT_CAPTURE_MS,
+    })
+}
+
+/// Keeps only the newest `MAX_PHOTOS_PER_BUS` photos of the bus: the older rows are forgotten and their
+/// files removed. This is clean-up: a failure is logged and never fails the photo that was just stored.
+async fn delete_old_photos(db: &PgPool, bus_id: i32) {
+    let paths = match repo::delete_older_than_newest(db, bus_id, MAX_PHOTOS_PER_BUS).await {
+        Ok(paths) => paths,
+        Err(e) => {
+            tracing::error!(bus_id, "cannot delete the old photos: {e}");
+            return;
+        }
+    };
+    if paths.is_empty() {
+        return;
+    }
+    for path in &paths {
+        if let Err(e) = tokio::fs::remove_file(path).await {
+            tracing::warn!("cannot remove the old photo {path}: {e}");
+        }
+    }
+    tracing::info!(
+        bus_id,
+        deleted = paths.len(),
+        kept = MAX_PHOTOS_PER_BUS,
+        "old photos deleted: only the newest are kept"
+    );
+}
+
+/// Makes the `photos` folder, so it is there from the start. Called once when the server starts.
+pub fn prepare_photos_folder() {
+    std::fs::create_dir_all(PHOTOS_DIR).expect("cannot create the photos folder");
 }
 
 /// Writes the file, making its folder first. A failure is a 500 and is logged.

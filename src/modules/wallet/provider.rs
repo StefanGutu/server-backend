@@ -17,7 +17,9 @@ pub enum ChargeResult {
     /// The card was refused.
     Declined,
     /// The bank wants the user to confirm in the app, with this client secret.
-    AuthenticationRequired { client_secret: String },
+    AuthenticationRequired {
+        client_secret: String,
+    },
 }
 
 /// The fake provider pays everything except these two test ids (the same names the Stripe test
@@ -31,22 +33,36 @@ pub trait PaymentProvider: Send + Sync {
     fn create_setup(&self) -> BoxFuture<'_, Result<String, AppError>>;
 
     /// Takes `amount_bani` from the card the provider knows as `payment_method_id`.
-    fn charge<'a>(&'a self, payment_method_id: &'a str, amount_bani: i32) -> BoxFuture<'a, Result<ChargeResult, AppError>>;
+    fn charge<'a>(
+        &'a self,
+        payment_method_id: &'a str,
+        amount_bani: i32,
+    ) -> BoxFuture<'a, Result<ChargeResult, AppError>>;
 }
 
 /// A provider that always says yes and keeps nothing. Used until a real one is connected.
 pub struct FakeProvider;
 
 fn fake_secret() -> String {
-    format!("seti_fake_{}_secret_{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
+    format!(
+        "seti_fake_{}_secret_{}",
+        Uuid::new_v4().simple(),
+        Uuid::new_v4().simple()
+    )
 }
 
 impl PaymentProvider for FakeProvider {
-    fn charge<'a>(&'a self, payment_method_id: &'a str, _amount_bani: i32) -> BoxFuture<'a, Result<ChargeResult, AppError>> {
+    fn charge<'a>(
+        &'a self,
+        payment_method_id: &'a str,
+        _amount_bani: i32,
+    ) -> BoxFuture<'a, Result<ChargeResult, AppError>> {
         Box::pin(async move {
             Ok(match payment_method_id {
                 FAKE_DECLINED_ID => ChargeResult::Declined,
-                FAKE_AUTHENTICATION_ID => ChargeResult::AuthenticationRequired { client_secret: fake_secret() },
+                FAKE_AUTHENTICATION_ID => ChargeResult::AuthenticationRequired {
+                    client_secret: fake_secret(),
+                },
                 _ => ChargeResult::Paid,
             })
         })

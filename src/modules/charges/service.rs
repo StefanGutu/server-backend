@@ -6,22 +6,49 @@ use uuid::Uuid;
 use chrono::DateTime;
 
 use super::{
-    models::{Charge, ChargeStatus, NewCharge, PublicKeyInfo, PublicKeysResponse, TicketKey, VerifyAnswer},
-    repo,
+    models::{
+        Charge, ChargeStatus, NewCharge, PublicKeyInfo, PublicKeysResponse, TicketKey, VerifyAnswer,
+    },
+    repo, statement,
     ticket::{self, TicketClaims},
 };
 use crate::{
     error::AppError,
     extract::ListQuery,
-    modules::auth::{self, models::User},
+    modules::{
+        auth::{self, models::User},
+        extras::trips,
+    },
 };
+
+/// GET /statements/{YYYY-MM}: the PDF of the month with the user's trips and their total. 400 for a month
+/// that is not `YYYY-MM`, 404 when the user has no trip in it.
+pub async fn statement_pdf(db: &PgPool, user_id: Uuid, month: &str) -> Result<Vec<u8>, AppError> {
+    let (first_day, end_day) = statement::parse_month(month)?;
+    let month_trips = trips::service::trips_between(db, user_id, first_day, end_day).await?;
+    if month_trips.is_empty() {
+        return Err(AppError::NotFound);
+    }
+    Ok(statement::build_statement(
+        &statement::month_label(first_day),
+        &month_trips,
+    ))
+}
 
 /// GET /charges: the user's charges, newest first, `limit` at a time. `before` is the id of
 /// the last charge the app has; an id that is not one of the user's charges is a 404.
-pub async fn list_charges(db: &PgPool, user_id: Uuid, query: &ListQuery) -> Result<Vec<Charge>, AppError> {
+pub async fn list_charges(
+    db: &PgPool,
+    user_id: Uuid,
+    query: &ListQuery,
+) -> Result<Vec<Charge>, AppError> {
     let limit = query.page_size()?;
     let after = match query.before {
-        Some(charge_id) => Some(repo::find_cursor(db, user_id, charge_id).await?.ok_or(AppError::NotFound)?),
+        Some(charge_id) => Some(
+            repo::find_cursor(db, user_id, charge_id)
+                .await?
+                .ok_or(AppError::NotFound)?,
+        ),
         None => None,
     };
     let rows = repo::list_charges(db, user_id, after, limit).await?;
@@ -54,7 +81,9 @@ pub async fn sign_ticket(db: &PgPool, claims: &TicketClaims) -> Result<String, A
 /// GET /tickets/public-key: every public key, so the app and the inspector can check a ticket.
 pub async fn public_keys(db: &PgPool) -> Result<PublicKeysResponse, AppError> {
     let keys = repo::list_keys(db).await?;
-    Ok(PublicKeysResponse { keys: keys.into_iter().map(PublicKeyInfo::from).collect() })
+    Ok(PublicKeysResponse {
+        keys: keys.into_iter().map(PublicKeyInfo::from).collect(),
+    })
 }
 
 /// Creates a charge and its QR ticket (valid 60 minutes from `new.started_at`). The charge id is
@@ -68,8 +97,14 @@ pub async fn create_charge(db: &PgPool, new: &NewCharge) -> Result<Charge, AppEr
 }
 
 /// The charge of a ride, or None if it has none.
-pub async fn charge_for_session(db: &PgPool, user_id: Uuid, session_id: Uuid) -> Result<Option<Charge>, AppError> {
-    Ok(repo::find_by_session(db, user_id, session_id).await?.map(Charge::from))
+pub async fn charge_for_session(
+    db: &PgPool,
+    user_id: Uuid,
+    session_id: Uuid,
+) -> Result<Option<Charge>, AppError> {
+    Ok(repo::find_by_session(db, user_id, session_id)
+        .await?
+        .map(Charge::from))
 }
 
 /// Cancels a charge (for example when the ride could not be confirmed after it was made).
@@ -88,7 +123,11 @@ pub async fn complete_ride_charge(db: &PgPool, session_id: Uuid) -> Result<u64, 
 /// - `line`, `passengers`, `expiresAt`: from the token, also when it has expired; `null` when the
 ///   token is not ours.
 /// - `paid`: its charge exists and was not cancelled.
-pub fn verify_answer(claims: Option<&TicketClaims>, now: i64, charge_status: Option<ChargeStatus>) -> VerifyAnswer {
+pub fn verify_answer(
+    claims: Option<&TicketClaims>,
+    now: i64,
+    charge_status: Option<ChargeStatus>,
+) -> VerifyAnswer {
     VerifyAnswer {
         valid: claims.is_some_and(|c| c.exp > now),
         line: claims.map(|c| c.line.clone()),
@@ -99,7 +138,11 @@ pub fn verify_answer(claims: Option<&TicketClaims>, now: i64, charge_status: Opt
 }
 
 /// POST /tickets/verify: an inspector checks a `qrToken`. Only for the inspector role (403 for others).
-pub async fn verify_ticket(db: &PgPool, inspector: &User, qr_token: &str) -> Result<VerifyAnswer, AppError> {
+pub async fn verify_ticket(
+    db: &PgPool,
+    inspector: &User,
+    qr_token: &str,
+) -> Result<VerifyAnswer, AppError> {
     auth::service::require_inspector(inspector)?;
     let keys = repo::list_keys(db).await?;
     let claims = ticket::read(qr_token, &keys);
@@ -107,7 +150,11 @@ pub async fn verify_ticket(db: &PgPool, inspector: &User, qr_token: &str) -> Res
         Some(claims) => repo::find_charge_status(db, claims.cid).await?,
         None => None,
     };
-    let answer = verify_answer(claims.as_ref(), chrono::Utc::now().timestamp(), charge_status);
+    let answer = verify_answer(
+        claims.as_ref(),
+        chrono::Utc::now().timestamp(),
+        charge_status,
+    );
     tracing::info!(inspector_id = %inspector.id, valid = answer.valid, paid = answer.paid, "ticket checked");
     Ok(answer)
 }

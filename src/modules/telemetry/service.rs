@@ -19,7 +19,10 @@ pub fn parse(body: &[u8]) -> Result<Telemetry, AppError> {
 
 /// `boot_id` is 8 lowercase hex characters (server.md).
 fn boot_id_ok(boot_id: &str) -> bool {
-    boot_id.len() == 8 && boot_id.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+    boot_id.len() == 8
+        && boot_id
+            .bytes()
+            .all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 /// Checks the message against the signed device and the bus in the URL.
@@ -33,7 +36,9 @@ pub fn check(device: &Device, url_bus_id: i32, t: &Telemetry) -> Result<(), AppE
         ));
     }
     if !boot_id_ok(&t.boot_id) {
-        return Err(AppError::Validation("boot_id must be 8 lowercase hex characters.".into()));
+        return Err(AppError::Validation(
+            "boot_id must be 8 lowercase hex characters.".into(),
+        ));
     }
     // seq starts at 0 (server.md)
     if t.seq < 0 {
@@ -63,7 +68,22 @@ pub fn max_distance_from_first_m(positions: &[(f64, f64)]) -> f64 {
     let Some(&first) = positions.first() else {
         return 0.0;
     };
-    positions.iter().map(|&p| distance_m(first, p)).fold(0.0, f64::max)
+    positions
+        .iter()
+        .map(|&p| distance_m(first, p))
+        .fold(0.0, f64::max)
+}
+
+/// The GPS positions (lat, lon) of a bus received between two unix times, oldest first. Only messages with a
+/// GPS fix; `allow_sim`: also simulator positions (test mode only).
+pub async fn bus_positions(
+    db: &PgPool,
+    bus_id: i32,
+    from_epoch: i64,
+    to_epoch: i64,
+    allow_sim: bool,
+) -> Result<Vec<(f64, f64)>, AppError> {
+    Ok(repo::fix_positions(db, bus_id, from_epoch, to_epoch, allow_sim).await?)
 }
 
 /// How many metres a bus moved between two unix times (by the time the server received
@@ -76,12 +96,17 @@ pub async fn bus_movement_m(
     to_epoch: i64,
     allow_sim: bool,
 ) -> Result<f64, AppError> {
-    let positions = repo::fix_positions(db, bus_id, from_epoch, to_epoch, allow_sim).await?;
+    let positions = bus_positions(db, bus_id, from_epoch, to_epoch, allow_sim).await?;
     Ok(max_distance_from_first_m(&positions))
 }
 
 /// Whole flow: parse, check, store. Duplicates are fine (stored once, still Ok).
-pub async fn handle(db: &PgPool, device: &Device, url_bus_id: i32, body: &[u8]) -> Result<(), AppError> {
+pub async fn handle(
+    db: &PgPool,
+    device: &Device,
+    url_bus_id: i32,
+    body: &[u8],
+) -> Result<(), AppError> {
     let telemetry = parse(body)?;
     check(device, url_bus_id, &telemetry)?;
     devices::service::warn_if_route_differs(db, telemetry.bus_id, telemetry.route_id).await?;

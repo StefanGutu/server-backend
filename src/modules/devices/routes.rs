@@ -1,8 +1,4 @@
-use axum::{
-    Json, Router,
-    extract::State,
-    routing::get,
-};
+use axum::{Json, Router, extract::State, routing::get};
 
 use super::{extractor::SignedRequest, models::Route, service};
 use crate::{error::AppError, extract::ApiPath, state::AppState};

@@ -19,7 +19,15 @@ async fn post_sighting(
     CurrentUser(user): CurrentUser,
     ApiJson(sighting): ApiJson<Sighting>, // must be last: it reads the body
 ) -> Result<(StatusCode, Json<Value>), AppError> {
-    let reply = match service::handle(&state.db, user.id, &sighting, state.config.test_mode).await? {
+    let reply = match service::handle(
+        &state.db,
+        &state.push,
+        user.id,
+        &sighting,
+        state.config.test_mode,
+    )
+    .await?
+    {
         Outcome::Accepted(status) => (StatusCode::OK, json!({ "ok": true, "ride_status": status })),
         Outcome::Rejected => (
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -35,7 +43,9 @@ async fn post_manual_ride(
     State(state): State<AppState>,
     CurrentUser(user): CurrentUser,
 ) -> Result<Response, AppError> {
-    Ok(ride_response(service::manual_ride(&state.db, user.id).await?))
+    Ok(ride_response(
+        service::manual_ride(&state.db, &state.push, user.id).await?,
+    ))
 }
 
 pub fn router() -> Router<AppState> {

@@ -2,22 +2,26 @@ use axum::{
     Json, Router,
     extract::State,
     http::StatusCode,
+    middleware,
     routing::{get, post},
 };
 
 use super::{
     extractor::{CurrentUser, MaybeBearerUser},
-    models::{AnonymousInput, LinkInput, LoginReply, Me, PatchMe, RefreshInput, SigninInput, TokenReply},
+    models::{
+        AnonymousInput, LinkInput, LoginReply, Me, PatchMe, RefreshInput, SigninInput, TokenReply,
+    },
     service,
 };
-use crate::{error::AppError, extract::ApiJson, state::AppState};
+use crate::{error::AppError, extract::ApiJson, rate_limit::limit_auth, state::AppState};
 
 /// POST /auth/anonymous: a new anonymous user and their tokens. No login needed.
 async fn post_anonymous(
     State(state): State<AppState>,
     ApiJson(input): ApiJson<AnonymousInput>,
 ) -> Result<Json<TokenReply>, AppError> {
-    let reply = service::login_anonymous(&state.db, &state.config.jwt_secret, &input.device_id).await?;
+    let reply =
+        service::login_anonymous(&state.db, &state.config.jwt_secret, &input.device_id).await?;
     Ok(Json(reply))
 }
 
@@ -46,7 +50,16 @@ async fn post_link(
     CurrentUser(user): CurrentUser,
     ApiJson(input): ApiJson<LinkInput>, // must be last: it reads the body
 ) -> Result<Json<LoginReply>, AppError> {
-    Ok(Json(service::link(&state.db, &state.config.jwt_secret, &state.id_tokens, &user, &input).await?))
+    Ok(Json(
+        service::link(
+            &state.db,
+            &state.config.jwt_secret,
+            &state.id_tokens,
+            &user,
+            &input,
+        )
+        .await?,
+    ))
 }
 
 /// POST /auth/signin: logs in with a Google or Apple identity. No login needed. If the call carries the
@@ -56,18 +69,31 @@ async fn post_signin(
     MaybeBearerUser(caller): MaybeBearerUser,
     ApiJson(input): ApiJson<SigninInput>, // must be last: it reads the body
 ) -> Result<Json<LoginReply>, AppError> {
-    let reply = service::signin(&state.db, &state.config.jwt_secret, &state.id_tokens, &input, caller.as_ref()).await?;
+    let reply = service::signin(
+        &state.db,
+        &state.config.jwt_secret,
+        &state.id_tokens,
+        &input,
+        caller.as_ref(),
+    )
+    .await?;
     Ok(Json(reply))
 }
 
 /// POST /auth/logout: the refresh tokens of the user are revoked. 204, no body.
-async fn post_logout(State(state): State<AppState>, CurrentUser(user): CurrentUser) -> Result<StatusCode, AppError> {
+async fn post_logout(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+) -> Result<StatusCode, AppError> {
     service::logout(&state.db, &user).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// GET /me: the logged-in user.
-async fn get_me(State(state): State<AppState>, CurrentUser(user): CurrentUser) -> Result<Json<Me>, AppError> {
+async fn get_me(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+) -> Result<Json<Me>, AppError> {
     Ok(Json(service::me(&state.db, user).await?))
 }
 
@@ -90,15 +116,22 @@ async fn delete_me(
     Ok(StatusCode::NO_CONTENT)
 }
 
-pub fn router() -> Router<AppState> {
+/// The calls that make or prove a login. They are the ones to hammer for tokens or codes, so each IP
+/// address may make only a few of them in a minute (`rate_limit::limit_auth`, step 34).
+fn login_router(state: AppState) -> Router<AppState> {
     let router = Router::new()
         .route("/auth/anonymous", post(post_anonymous))
         .route("/auth/refresh", post(post_refresh))
         .route("/auth/link", post(post_link))
-        .route("/auth/signin", post(post_signin))
-        .route("/auth/logout", post(post_logout))
-        .route("/me", get(get_me).patch(patch_me).delete(delete_me));
+        .route("/auth/signin", post(post_signin));
     #[cfg(feature = "phone-login")]
     let router = router.route("/auth/otp/start", post(post_otp_start));
-    router
+    router.route_layer(middleware::from_fn_with_state(state, limit_auth))
+}
+
+pub fn router(state: AppState) -> Router<AppState> {
+    Router::new()
+        .route("/auth/logout", post(post_logout))
+        .route("/me", get(get_me).patch(patch_me).delete(delete_me))
+        .merge(login_router(state))
 }

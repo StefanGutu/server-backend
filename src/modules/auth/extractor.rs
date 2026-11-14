@@ -1,4 +1,7 @@
-use axum::{extract::FromRequestParts, http::{header::AUTHORIZATION, request::Parts}};
+use axum::{
+    extract::FromRequestParts,
+    http::{header::AUTHORIZATION, request::Parts},
+};
 
 use super::{models::User, service};
 use crate::{error::AppError, extract::header_str, state::AppState};
@@ -21,7 +24,11 @@ impl FromRequestParts<AppState> for MaybeBearerUser {
     type Rejection = AppError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, AppError> {
-        let Some(header) = parts.headers.get(AUTHORIZATION).and_then(|value| value.to_str().ok()) else {
+        let Some(header) = parts
+            .headers
+            .get(AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+        else {
             return Ok(Self(None));
         };
         match service::user_from_authorization(&state.db, &state.config.jwt_secret, header).await {
@@ -38,7 +45,9 @@ impl FromRequestParts<AppState> for CurrentUser {
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, AppError> {
         if parts.headers.contains_key(AUTHORIZATION) {
             let header = header_str(&parts.headers, AUTHORIZATION.as_str())?;
-            let user = service::user_from_authorization(&state.db, &state.config.jwt_secret, header).await?;
+            let user =
+                service::user_from_authorization(&state.db, &state.config.jwt_secret, header)
+                    .await?;
             return Ok(Self(user));
         }
         if !state.config.test_mode {

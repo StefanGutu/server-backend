@@ -20,6 +20,10 @@ use crate::{
             models::{Charge, ChargeStatus, NewCharge},
         },
         devices::{self, models::BusLine},
+        extras::notifications::{
+            self,
+            push::{Push, PushSender, PushType},
+        },
         idempotency::{
             self,
             models::{Begin, IdempotentRequest},
@@ -43,7 +47,9 @@ const CONFIRM_WINDOW_SECS: i64 = 120;
 /// How long the app waits before asking again (server-api.md). `None`: stop asking.
 pub fn poll_after_ms(status: RideStatus) -> Option<u32> {
     match status {
-        RideStatus::Pending | RideStatus::AwaitingConfirmation | RideStatus::PaymentFailed => Some(3000),
+        RideStatus::Pending | RideStatus::AwaitingConfirmation | RideStatus::PaymentFailed => {
+            Some(3000)
+        }
         RideStatus::Confirmed => Some(15000),
         RideStatus::None | RideStatus::Rejected | RideStatus::Ended => None,
     }
@@ -54,7 +60,10 @@ pub fn poll_after_ms(status: RideStatus) -> Option<u32> {
 pub fn needs_vehicle(session: &RideSession) -> bool {
     let status_shows_vehicle = matches!(
         session.status,
-        RideStatus::AwaitingConfirmation | RideStatus::PaymentFailed | RideStatus::Confirmed | RideStatus::Ended
+        RideStatus::AwaitingConfirmation
+            | RideStatus::PaymentFailed
+            | RideStatus::Confirmed
+            | RideStatus::Ended
     );
     status_shows_vehicle && session.candidates.is_empty()
 }
@@ -82,7 +91,11 @@ pub fn needs_charge(status: RideStatus) -> bool {
 /// only when `needs_vehicle` is true; `charge` is the charge of the ride, needed when `needs_charge`.
 pub fn build_ride(session: RideSession, bus: Option<BusLine>, charge: Option<Charge>) -> Ride {
     let vehicle = if needs_vehicle(&session) {
-        bus.map(|b| Vehicle { bus_id: session.bus_id, line: b.line, destination: b.destination })
+        bus.map(|b| Vehicle {
+            bus_id: session.bus_id,
+            line: b.line,
+            destination: b.destination,
+        })
     } else {
         None
     };
@@ -105,7 +118,11 @@ pub fn build_ride(session: RideSession, bus: Option<BusLine>, charge: Option<Cha
         vehicle,
         candidates: session.candidates.0,
         payment,
-        charge: if needs_charge(session.status) { charge } else { None },
+        charge: if needs_charge(session.status) {
+            charge
+        } else {
+            None
+        },
     }
 }
 
@@ -156,7 +173,10 @@ pub async fn current_ride(
             build_ride(session, bus, charge)
         }
     };
-    Ok(RideReply::Modified { ride: Box::new(ride), etag })
+    Ok(RideReply::Modified {
+        ride: Box::new(ride),
+        etag,
+    })
 }
 
 /// What a new sighting changes about the ride.
@@ -164,11 +184,16 @@ pub async fn current_ride(
 pub enum RideAction {
     Nothing,
     /// Start a ride in `pending` on this bus.
-    Start { bus_id: i32 },
+    Start {
+        bus_id: i32,
+    },
     /// The current `pending` ride becomes `awaiting_confirmation`.
     /// `candidate_bus_ids` is empty when one bus qualifies, and lists every bus when
     /// several do (then the server cannot choose, the app asks the user).
-    Offer { bus_id: i32, candidate_bus_ids: Vec<i32> },
+    Offer {
+        bus_id: i32,
+        candidate_bus_ids: Vec<i32>,
+    },
 }
 
 /// A bus we think the user is on: heard in enough slots in a row, the bus moved, and it is
@@ -184,7 +209,10 @@ pub fn decide(current: Option<&RideSession>, evidence: &[BusEvidence]) -> RideAc
         return RideAction::Nothing;
     };
     // Buses heard in the newest slot, lowest id first.
-    let mut heard_now: Vec<&BusEvidence> = evidence.iter().filter(|e| e.last_slot == newest_slot).collect();
+    let mut heard_now: Vec<&BusEvidence> = evidence
+        .iter()
+        .filter(|e| e.last_slot == newest_slot)
+        .collect();
     heard_now.sort_by_key(|e| e.bus_id);
 
     match current {
@@ -219,8 +247,14 @@ pub fn decide(current: Option<&RideSession>, evidence: &[BusEvidence]) -> RideAc
             bus_ids.sort_unstable();
             match bus_ids.as_slice() {
                 [] => RideAction::Nothing,
-                [only] => RideAction::Offer { bus_id: *only, candidate_bus_ids: Vec::new() },
-                [first, ..] => RideAction::Offer { bus_id: *first, candidate_bus_ids: bus_ids.clone() },
+                [only] => RideAction::Offer {
+                    bus_id: *only,
+                    candidate_bus_ids: Vec::new(),
+                },
+                [first, ..] => RideAction::Offer {
+                    bus_id: *first,
+                    candidate_bus_ids: bus_ids.clone(),
+                },
             }
         }
         // awaiting_confirmation, payment_failed, confirmed: already in a ride.
@@ -233,7 +267,10 @@ async fn candidates_for(db: &PgPool, bus_ids: &[i32]) -> Result<Vec<Candidate>, 
     let mut candidates = Vec::new();
     for &bus_id in bus_ids {
         if let Some(bus) = devices::service::bus_line(db, bus_id).await? {
-            candidates.push(Candidate { bus_id, line: bus.line });
+            candidates.push(Candidate {
+                bus_id,
+                line: bus.line,
+            });
         }
     }
     Ok(candidates)
@@ -243,6 +280,7 @@ async fn candidates_for(db: &PgPool, bus_ids: &[i32]) -> Result<Vec<Candidate>, 
 /// if the decision says so and returns the status the ride has afterwards.
 pub async fn update_from_sightings(
     db: &PgPool,
+    push: &PushSender,
     user_id: Uuid,
     evidence: &[BusEvidence],
 ) -> Result<RideStatus, AppError> {
@@ -250,10 +288,22 @@ pub async fn update_from_sightings(
     let expires_at = Utc::now() + chrono::Duration::seconds(CONFIRM_WINDOW_SECS);
 
     match (decide(current.as_ref(), evidence), &current) {
-        (RideAction::Start { bus_id }, _) => repo::insert_pending(db, user_id, bus_id, expires_at).await?,
-        (RideAction::Offer { bus_id, candidate_bus_ids }, Some(session)) => {
+        (RideAction::Start { bus_id }, _) => {
+            repo::insert_pending(db, user_id, bus_id, expires_at).await?
+        }
+        (
+            RideAction::Offer {
+                bus_id,
+                candidate_bus_ids,
+            },
+            Some(session),
+        ) => {
             let candidates = candidates_for(db, &candidate_bus_ids).await?;
-            repo::offer_ride(db, session.id, bus_id, &candidates, expires_at).await?;
+            if repo::offer_ride(db, session.id, bus_id, &candidates, expires_at).await? {
+                // The app may be closed: tell the phone. Only the call that changed the ride sends it.
+                let awaiting = Push::new(PushType::AwaitingConfirmation, session.id);
+                notifications::service::send_push(db, push, user_id, awaiting).await;
+            }
         }
         _ => {}
     }
@@ -304,7 +354,11 @@ const PASSENGERS_COVERED_BY_PASS: i32 = 1;
 /// What the card must pay, in bani. `pass_covers_holder`: the ride is paid with a pass, which takes
 /// one passenger. Never below 0. Pure.
 pub fn amount_to_pay_bani(passengers: i32, pass_covers_holder: bool) -> i32 {
-    let covered = if pass_covers_holder { PASSENGERS_COVERED_BY_PASS } else { 0 };
+    let covered = if pass_covers_holder {
+        PASSENGERS_COVERED_BY_PASS
+    } else {
+        0
+    };
     FARE_PER_PERSON_BANI * (passengers - covered).max(0)
 }
 
@@ -334,30 +388,40 @@ pub fn check_confirmable(
     match session.status {
         RideStatus::Confirmed => return Ok(Confirmable::AlreadyConfirmed),
         RideStatus::Pending => {
-            return Err(AppError::Validation("The ride is not waiting for a confirmation yet.".into()));
+            return Err(AppError::Validation(
+                "The ride is not waiting for a confirmation yet.".into(),
+            ));
         }
-        RideStatus::Rejected | RideStatus::Ended | RideStatus::None => return Err(AppError::SessionExpired),
+        RideStatus::Rejected | RideStatus::Ended | RideStatus::None => {
+            return Err(AppError::SessionExpired);
+        }
         RideStatus::AwaitingConfirmation | RideStatus::PaymentFailed => {}
     }
     if session.expires_at <= now {
         return Err(AppError::SessionExpired);
     }
     if !(1..=MAX_PASSENGERS).contains(&input.passengers) {
-        return Err(AppError::Validation("passengers must be between 1 and 10.".into()));
+        return Err(AppError::Validation(
+            "passengers must be between 1 and 10.".into(),
+        ));
     }
     let bus_id = if session.candidates.0.is_empty() {
         match input.bus_id {
             Some(bus_id) if bus_id != session.bus_id => {
-                return Err(AppError::Validation("busId is not the bus of this ride.".into()));
+                return Err(AppError::Validation(
+                    "busId is not the bus of this ride.".into(),
+                ));
             }
             _ => session.bus_id,
         }
     } else {
-        let chosen = input
-            .bus_id
-            .ok_or_else(|| AppError::Validation("busId is required: say which bus you are on.".into()))?;
+        let chosen = input.bus_id.ok_or_else(|| {
+            AppError::Validation("busId is required: say which bus you are on.".into())
+        })?;
         if !session.candidates.0.iter().any(|c| c.bus_id == chosen) {
-            return Err(AppError::Validation("busId is not one of the candidates.".into()));
+            return Err(AppError::Validation(
+                "busId is not one of the candidates.".into(),
+            ));
         }
         chosen
     };
@@ -368,15 +432,26 @@ pub fn check_confirmable(
 /// and the app gets 402 `PAYMENT_DECLINED` with the reason.
 async fn payment_failed(
     db: &PgPool,
+    push: &PushSender,
+    user_id: Uuid,
     session_id: Uuid,
     reason: PaymentReason,
     client_secret: Option<&str>,
 ) -> AppError {
     let expires_at = Utc::now() + chrono::Duration::seconds(CONFIRM_WINDOW_SECS);
-    if let Err(e) = repo::mark_payment_failed(db, session_id, reason, client_secret, expires_at).await {
+    if let Err(e) =
+        repo::mark_payment_failed(db, session_id, reason, client_secret, expires_at).await
+    {
         return e.into();
     }
     tracing::warn!(session_id = %session_id, reason = reason.as_str(), "payment failed");
+    notifications::service::send_push(
+        db,
+        push,
+        user_id,
+        Push::new(PushType::PaymentFailed, session_id),
+    )
+    .await;
     AppError::PaymentDeclined(reason.as_str())
 }
 
@@ -384,6 +459,14 @@ async fn payment_failed(
 /// works out what is paid with what, takes the money (the fake provider), makes the charge with its
 /// ticket and sets the ride to `confirmed`. The answer is the ride, like `GET /rides/current`.
 ///
+/// What a confirm needs besides the database: the payment provider, the push sender and whether the
+/// server runs in test mode.
+pub struct PayContext<'a> {
+    pub provider: &'a dyn PaymentProvider,
+    pub push: &'a PushSender,
+    pub test_mode: bool,
+}
+
 /// One confirm at a time per ride: a second one waits for the first to finish, then finds the ride
 /// `confirmed` and answers with it, so a card is never charged twice (R26). The payment, the charge
 /// and the ride are still three steps, so a stop of the server between them can leave a charge
@@ -394,17 +477,16 @@ async fn payment_failed(
 /// call that worked is stored, so a refused payment can be tried again with the same key.
 pub async fn confirm(
     db: &PgPool,
-    provider: &dyn PaymentProvider,
+    pay: &PayContext<'_>,
     user: &User,
     session_id: Uuid,
     input: &ConfirmInput,
-    test_mode: bool,
     idempotency: &IdempotentRequest,
 ) -> Result<RideReply, AppError> {
     auth::service::require_account(user)?;
     let name = format!("ride:{session_id}");
     let lock = idempotency::service::lock(db, &name).await?;
-    let result = confirm_with_key(db, provider, user, session_id, input, test_mode, idempotency).await;
+    let result = confirm_with_key(db, pay, user, session_id, input, idempotency).await;
     idempotency::service::unlock(lock, &name).await;
     result
 }
@@ -413,18 +495,17 @@ pub async fn confirm(
 /// calls with the same key cannot both be new.
 async fn confirm_with_key(
     db: &PgPool,
-    provider: &dyn PaymentProvider,
+    pay: &PayContext<'_>,
     user: &User,
     session_id: Uuid,
     input: &ConfirmInput,
-    test_mode: bool,
     request: &IdempotentRequest,
 ) -> Result<RideReply, AppError> {
     if let Begin::Replay(stored) = idempotency::service::begin(db, user.id, request).await? {
         tracing::info!(key = %request.key, session_id = %session_id, "same Idempotency-Key: stored answer sent, nothing charged");
         return Ok(RideReply::Stored(stored));
     }
-    let reply = confirm_locked(db, provider, user, session_id, input, test_mode).await?;
+    let reply = confirm_locked(db, pay, user, session_id, input).await?;
     if let RideReply::Modified { ride, .. } = &reply {
         let stored = serde_json::to_value(ride).map_err(|_| AppError::Server)?;
         // If keeping the answer fails the ride is confirmed anyway, and a repeat finds it `confirmed`.
@@ -438,31 +519,36 @@ async fn confirm_with_key(
 /// The work of `confirm`, done while this request holds the lock of the ride.
 async fn confirm_locked(
     db: &PgPool,
-    provider: &dyn PaymentProvider,
+    pay: &PayContext<'_>,
     user: &User,
     session_id: Uuid,
     input: &ConfirmInput,
-    test_mode: bool,
 ) -> Result<RideReply, AppError> {
-    let session = repo::find_session(db, user.id, session_id).await?.ok_or(AppError::NotFound)?;
+    let session = repo::find_session(db, user.id, session_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
     let bus_id = match check_confirmable(&session, input, Utc::now())? {
         Confirmable::AlreadyConfirmed => return current_ride(db, user.id, None).await,
         Confirmable::Ready { bus_id } => bus_id,
     };
-    let bus = devices::service::bus_line(db, bus_id).await?.ok_or(AppError::Server)?;
+    let bus = devices::service::bus_line(db, bus_id)
+        .await?
+        .ok_or(AppError::Server)?;
 
     // What pays: the source of the request, or the user's default.
     let source_id = input.source_id.or(user.default_source_id).ok_or_else(|| {
         AppError::NoPaymentMethod("No card or valid pass to pay with. Add a card first.".into())
     })?;
-    let source = wallet::service::find_source(db, user.id, source_id).await?.ok_or(AppError::NotFound)?;
+    let source = wallet::service::find_source(db, user.id, source_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
 
     // The amount, and the card that takes it (none when a pass covers everything).
     let (amount_bani, card): (i32, Option<PaymentMethod>) = match source {
         Source::Card(card) => (amount_to_pay_bani(input.passengers, false), Some(card)),
         Source::Pass(pass) => {
             let today = Utc::now().date_naive();
-            let check = wallet::service::check_pass(&pass, &bus.line, today, test_mode);
+            let check = wallet::service::check_pass(&pass, &bus.line, today, pay.test_mode);
             if let Some(message) = check.message() {
                 tracing::info!(session_id = %session.id, pass_id = %pass.id, ?check, "pass cannot be used for this ride");
                 return Err(AppError::NoPaymentMethod(message.into()));
@@ -483,14 +569,34 @@ async fn confirm_locked(
     };
 
     if let Some(card) = &card {
-        match provider.charge(&card.provider_method_id, amount_bani).await? {
+        match pay
+            .provider
+            .charge(&card.provider_method_id, amount_bani)
+            .await?
+        {
             ChargeResult::Paid => {}
             ChargeResult::Declined => {
-                return Err(payment_failed(db, session.id, PaymentReason::CardDeclined, None).await);
+                return Err(payment_failed(
+                    db,
+                    pay.push,
+                    user.id,
+                    session.id,
+                    PaymentReason::CardDeclined,
+                    None,
+                )
+                .await);
             }
             ChargeResult::AuthenticationRequired { client_secret } => {
                 let reason = PaymentReason::AuthenticationRequired;
-                return Err(payment_failed(db, session.id, reason, Some(&client_secret)).await);
+                return Err(payment_failed(
+                    db,
+                    pay.push,
+                    user.id,
+                    session.id,
+                    reason,
+                    Some(&client_secret),
+                )
+                .await);
             }
         }
     }
@@ -503,7 +609,11 @@ async fn confirm_locked(
             line: bus.line,
             destination: bus.destination,
             amount_bani,
-            status: if amount_bani == 0 { ChargeStatus::CoveredByPass } else { ChargeStatus::InProgress },
+            status: if amount_bani == 0 {
+                ChargeStatus::CoveredByPass
+            } else {
+                ChargeStatus::InProgress
+            },
             paid_with: source_id,
             passengers: input.passengers,
             started_at: Utc::now(),
@@ -516,6 +626,13 @@ async fn confirm_locked(
         // Another request changed the ride first (for example it expired): do not keep this charge.
         charges::service::cancel_charge(db, charge.id).await?;
         tracing::warn!(session_id = %session.id, charge_id = %charge.id, "ride changed while paying: charge cancelled");
+        notifications::service::send_push(
+            db,
+            pay.push,
+            user.id,
+            Push::new(PushType::ChargeCancelled, session.id),
+        )
+        .await;
     } else {
         tracing::info!(
             session_id = %session.id, charge_id = %charge.id, amount_bani, passengers = input.passengers,
@@ -543,12 +660,18 @@ pub enum Declinable {
 pub fn check_declinable(session: &RideSession, now: DateTime<Utc>) -> Result<Declinable, AppError> {
     let expired = session.expires_at <= now;
     match session.status {
-        RideStatus::Confirmed => Err(AppError::Validation("A paid ride cannot be declined.".into())),
+        RideStatus::Confirmed => Err(AppError::Validation(
+            "A paid ride cannot be declined.".into(),
+        )),
         RideStatus::Ended | RideStatus::None => Err(AppError::SessionExpired),
         RideStatus::Rejected if expired => Err(AppError::SessionExpired),
         RideStatus::Rejected => Ok(Declinable::AlreadyRejected),
-        RideStatus::AwaitingConfirmation | RideStatus::PaymentFailed if expired => Err(AppError::SessionExpired),
-        RideStatus::AwaitingConfirmation | RideStatus::PaymentFailed | RideStatus::Pending => Ok(Declinable::Ready),
+        RideStatus::AwaitingConfirmation | RideStatus::PaymentFailed if expired => {
+            Err(AppError::SessionExpired)
+        }
+        RideStatus::AwaitingConfirmation | RideStatus::PaymentFailed | RideStatus::Pending => {
+            Ok(Declinable::Ready)
+        }
     }
 }
 
@@ -564,7 +687,9 @@ pub async fn decline(db: &PgPool, user: &User, session_id: Uuid) -> Result<RideR
 }
 
 async fn decline_locked(db: &PgPool, user: &User, session_id: Uuid) -> Result<RideReply, AppError> {
-    let session = repo::find_session(db, user.id, session_id).await?.ok_or(AppError::NotFound)?;
+    let session = repo::find_session(db, user.id, session_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
     if check_declinable(&session, Utc::now())? == Declinable::Ready
         && repo::reject_open_session(db, session.id).await?
     {
@@ -588,11 +713,13 @@ pub enum ManualAction {
 /// starts a new ride: it is a new, explicit action.
 pub fn decide_manual(current: Option<&RideSession>) -> ManualAction {
     match current.map(|s| s.status) {
-        None | Some(RideStatus::Rejected | RideStatus::Ended | RideStatus::None) => ManualAction::StartAwaiting,
-        Some(RideStatus::Pending) => ManualAction::OfferPending,
-        Some(RideStatus::AwaitingConfirmation | RideStatus::PaymentFailed | RideStatus::Confirmed) => {
-            ManualAction::Nothing
+        None | Some(RideStatus::Rejected | RideStatus::Ended | RideStatus::None) => {
+            ManualAction::StartAwaiting
         }
+        Some(RideStatus::Pending) => ManualAction::OfferPending,
+        Some(
+            RideStatus::AwaitingConfirmation | RideStatus::PaymentFailed | RideStatus::Confirmed,
+        ) => ManualAction::Nothing,
     }
 }
 
@@ -614,9 +741,16 @@ pub fn manual_offer(heard_bus_ids: &[i32]) -> Option<(i32, Vec<i32>)> {
 /// are the buses the user heard in the last 2 minutes (the caller asks `sightings`); with none it is
 /// a 422. The ride goes to `awaiting_confirmation`, without the 3 slots and the 300 m the server asks
 /// for on its own. The app gets the ride.
-pub async fn start_manual_ride(db: &PgPool, user_id: Uuid, heard_bus_ids: &[i32]) -> Result<RideReply, AppError> {
+pub async fn start_manual_ride(
+    db: &PgPool,
+    push: &PushSender,
+    user_id: Uuid,
+    heard_bus_ids: &[i32],
+) -> Result<RideReply, AppError> {
     let Some((bus_id, candidate_bus_ids)) = manual_offer(heard_bus_ids) else {
-        return Err(AppError::Unprocessable("No valid sighting in the last 2 minutes.".into()));
+        return Err(AppError::Unprocessable(
+            "No valid sighting in the last 2 minutes.".into(),
+        ));
     };
     let candidates = candidates_for(db, &candidate_bus_ids).await?;
     let expires_at = Utc::now() + chrono::Duration::seconds(CONFIRM_WINDOW_SECS);
@@ -625,18 +759,26 @@ pub async fn start_manual_ride(db: &PgPool, user_id: Uuid, heard_bus_ids: &[i32]
     match decide_manual(current.as_ref()) {
         ManualAction::Nothing => {}
         ManualAction::OfferPending => {
-            if let Some(session) = &current {
-                repo::offer_ride(db, session.id, bus_id, &candidates, expires_at).await?;
+            if let Some(session) = &current
+                && repo::offer_ride(db, session.id, bus_id, &candidates, expires_at).await?
+            {
+                let awaiting = Push::new(PushType::AwaitingConfirmation, session.id);
+                notifications::service::send_push(db, push, user_id, awaiting).await;
             }
         }
         ManualAction::StartAwaiting => {
-            let inserted = repo::insert_awaiting(db, user_id, bus_id, &candidates, expires_at).await?;
-            // The sightings of this user may have started a `pending` ride a moment ago: use it.
-            if !inserted
-                && let Some(session) = repo::find_current_session(db, user_id).await?
+            let inserted =
+                repo::insert_awaiting(db, user_id, bus_id, &candidates, expires_at).await?;
+            if let Some(session_id) = inserted {
+                let awaiting = Push::new(PushType::AwaitingConfirmation, session_id);
+                notifications::service::send_push(db, push, user_id, awaiting).await;
+            } else if let Some(session) = repo::find_current_session(db, user_id).await?
                 && session.status == RideStatus::Pending
+                // The sightings of this user may have started a `pending` ride a moment ago: use it.
+                && repo::offer_ride(db, session.id, bus_id, &candidates, expires_at).await?
             {
-                repo::offer_ride(db, session.id, bus_id, &candidates, expires_at).await?;
+                let awaiting = Push::new(PushType::AwaitingConfirmation, session.id);
+                notifications::service::send_push(db, push, user_id, awaiting).await;
             }
         }
     }

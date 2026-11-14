@@ -38,7 +38,11 @@ pub struct AccessClaims {
 impl AccessClaims {
     /// Claims for a token made at `now` (unix seconds): valid for `ACCESS_TOKEN_SECS`.
     pub fn new(user_id: Uuid, now: i64) -> Self {
-        Self { sub: user_id, iat: now, exp: now + ACCESS_TOKEN_SECS }
+        Self {
+            sub: user_id,
+            iat: now,
+            exp: now + ACCESS_TOKEN_SECS,
+        }
     }
 }
 
@@ -64,7 +68,9 @@ pub fn verify_access(secret: &str, token: &str, now: i64) -> Option<Uuid> {
     validation.leeway = 0;
     validation.validate_exp = false; // checked below against the time we are given
     validation.set_required_spec_claims(&["sub", "exp", "iat"]);
-    let claims = decode::<AccessClaims>(token, &key, &validation).ok()?.claims;
+    let claims = decode::<AccessClaims>(token, &key, &validation)
+        .ok()?
+        .claims;
     (claims.exp > now).then_some(claims.sub)
 }
 
@@ -96,10 +102,14 @@ pub fn hash_refresh_token(token: &str) -> String {
 pub fn clean_device_id(device_id: &str) -> Result<&str, AppError> {
     let device_id = device_id.trim();
     if device_id.is_empty() {
-        return Err(AppError::Validation("deviceId must not be empty.".to_string()));
+        return Err(AppError::Validation(
+            "deviceId must not be empty.".to_string(),
+        ));
     }
     if device_id.chars().count() > MAX_DEVICE_ID_LEN {
-        return Err(AppError::Validation(format!("deviceId must have at most {MAX_DEVICE_ID_LEN} characters.")));
+        return Err(AppError::Validation(format!(
+            "deviceId must have at most {MAX_DEVICE_ID_LEN} characters."
+        )));
     }
     Ok(device_id)
 }

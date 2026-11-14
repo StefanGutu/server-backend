@@ -1,8 +1,4 @@
-use axum::{
-    Json, Router,
-    extract::State,
-    routing::post,
-};
+use axum::{Json, Router, extract::State, routing::post};
 use serde_json::{Value, json};
 
 use super::service;

@@ -9,7 +9,10 @@ use axum::{
 use uuid::Uuid;
 
 use super::{
-    models::{DefaultSourceInput, NewCardInput, NewPassInput, PassProduct, RenewInput, SetupResponse, WalletItem},
+    models::{
+        DefaultSourceInput, NewCardInput, NewPassInput, PassProduct, RenewInput, SetupResponse,
+        WalletItem,
+    },
     service,
 };
 use crate::{
@@ -40,7 +43,9 @@ async fn post_setup(
     State(state): State<AppState>,
     CurrentUser(_user): CurrentUser,
 ) -> Result<Json<SetupResponse>, AppError> {
-    Ok(Json(service::start_card_setup(state.payments.as_ref()).await?))
+    Ok(Json(
+        service::start_card_setup(state.payments.as_ref()).await?,
+    ))
 }
 
 /// POST /wallet/payment-methods: remember a card.
@@ -94,7 +99,10 @@ async fn post_renew(
     let endpoint = format!("POST /wallet/passes/{pass_id}/renew");
     let request = idempotency::service::request_from_headers(&headers, &endpoint, &body)?;
     let provider = state.payments.as_ref();
-    Ok(Json(service::renew_pass(&state.db, provider, &user, pass_id, &input, &request).await?).into_response())
+    Ok(
+        Json(service::renew_pass(&state.db, provider, &user, pass_id, &input, &request).await?)
+            .into_response(),
+    )
 }
 
 pub fn router() -> Router<AppState> {

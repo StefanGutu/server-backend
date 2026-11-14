@@ -9,8 +9,12 @@ pub const MAX_SKEW_SECS: i64 = 300;
 /// HMAC-SHA256 over "<timestamp>.<device_id>.<sha256 hex of body>".
 /// The key is the secret's ASCII bytes, not hex-decoded.
 fn make_mac(secret: &str, timestamp: &str, device_id: &str, body: &[u8]) -> Hmac<Sha256> {
-    let message = format!("{timestamp}.{device_id}.{}", hex::encode(Sha256::digest(body)));
-    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
+    let message = format!(
+        "{timestamp}.{device_id}.{}",
+        hex::encode(Sha256::digest(body))
+    );
+    let mut mac =
+        Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
     mac.update(message.as_bytes());
     mac
 }

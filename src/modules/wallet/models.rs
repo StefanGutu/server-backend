@@ -276,7 +276,9 @@ impl PassCheck {
             Self::Valid => None,
             Self::NotVerified => Some("This pass has not been verified. Pay with a card instead."),
             Self::NotValidToday => Some("This pass is not valid today. Pay with a card instead."),
-            Self::LineNotCovered => Some("This pass is not valid on this line. Pay with a card instead."),
+            Self::LineNotCovered => {
+                Some("This pass is not valid on this line. Pay with a card instead.")
+            }
         }
     }
 }

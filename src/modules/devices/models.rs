@@ -25,7 +25,11 @@ impl Route {
         let stops: Vec<&Point> = self.points.iter().filter(|p| p.name.is_some()).collect();
         let (first, last) = (stops.first()?, stops.last()?);
         let closes_loop = stops.len() > 1 && last.lat == first.lat && last.lon == first.lon;
-        let destination = if closes_loop { stops[stops.len() - 2] } else { last };
+        let destination = if closes_loop {
+            stops[stops.len() - 2]
+        } else {
+            last
+        };
         destination.name.as_deref()
     }
 }
@@ -39,7 +43,10 @@ pub struct BusLine {
 impl From<Route> for BusLine {
     fn from(route: Route) -> Self {
         let destination = route.destination().map(str::to_string);
-        Self { line: route.name, destination }
+        Self {
+            line: route.name,
+            destination,
+        }
     }
 }
 

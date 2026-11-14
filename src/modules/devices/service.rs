@@ -10,23 +10,35 @@ use crate::error::AppError;
 
 /// The route with this id, or NOT_FOUND.
 pub async fn get_route(db: &PgPool, route_id: i32) -> Result<Route, AppError> {
-    repo::find_route(db, route_id).await?.ok_or(AppError::NotFound)
+    repo::find_route(db, route_id)
+        .await?
+        .ok_or(AppError::NotFound)
 }
 
 /// Line name and destination of a bus. None when the bus does not exist.
 pub async fn bus_line(db: &PgPool, bus_id: i32) -> Result<Option<BusLine>, AppError> {
-    Ok(repo::find_route_of_bus(db, bus_id).await?.map(BusLine::from))
+    Ok(repo::find_route_of_bus(db, bus_id)
+        .await?
+        .map(BusLine::from))
 }
 
 /// A device may only call for its own bus, and only the calls of its role: Node A (the beacon) sends
 /// telemetry, Node B (the camera) sends photos. Anything else is 403 `FORBIDDEN`. Pure.
 pub fn require_device(device: &Device, role: DeviceRole, url_bus_id: i32) -> Result<(), AppError> {
-    if device.role == role && device.bus_id == url_bus_id { Ok(()) } else { Err(AppError::Forbidden) }
+    if device.role == role && device.bus_id == url_bus_id {
+        Ok(())
+    } else {
+        Err(AppError::Forbidden)
+    }
 }
 
 /// The device says which route it is configured for. If that is not the planned route of the bus,
 /// someone reconfigured the bus: a warning is written in the log (the call still goes on).
-pub async fn warn_if_route_differs(db: &PgPool, bus_id: i32, reported_route_id: i32) -> Result<(), AppError> {
+pub async fn warn_if_route_differs(
+    db: &PgPool,
+    bus_id: i32,
+    reported_route_id: i32,
+) -> Result<(), AppError> {
     let planned = planned_route_id(db, bus_id).await?;
     if planned != Some(reported_route_id) {
         tracing::warn!(
@@ -37,6 +49,11 @@ pub async fn warn_if_route_differs(db: &PgPool, bus_id: i32, reported_route_id: 
         );
     }
     Ok(())
+}
+
+/// The route a bus runs, with all its points (stops and bends). None when the bus does not exist.
+pub async fn route_of_bus(db: &PgPool, bus_id: i32) -> Result<Option<Route>, AppError> {
+    Ok(repo::find_route_of_bus(db, bus_id).await?)
 }
 
 /// The route a bus is planned to run (`buses.route_id`).
