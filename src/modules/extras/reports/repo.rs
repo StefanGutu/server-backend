@@ -16,12 +16,22 @@ macro_rules! select_report {
     };
 }
 
-/// The reports that have not expired, newest first (at most `limit`).
-pub async fn list_active(db: &PgPool, limit: i64) -> Result<Vec<Report>, sqlx::Error> {
+/// The reports that have not expired, newest first (at most `limit`), only of this line and kind when given.
+pub async fn list_active(
+    db: &PgPool,
+    limit: i64,
+    line: Option<&str>,
+    kind: Option<ReportKind>,
+) -> Result<Vec<Report>, sqlx::Error> {
     sqlx::query_as(select_report!(
-        "WHERE r.expires_at > now() ORDER BY r.id DESC LIMIT $1"
+        "WHERE r.expires_at > now()
+           AND ($2::text IS NULL OR lower(r.line) = lower($2))
+           AND ($3::text IS NULL OR r.kind = $3)
+         ORDER BY r.id DESC LIMIT $1"
     ))
     .bind(limit)
+    .bind(line)
+    .bind(kind)
     .fetch_all(db)
     .await
 }

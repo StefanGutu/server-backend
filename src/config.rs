@@ -20,7 +20,13 @@ pub struct Config {
     pub rate_limit_max: usize,
     /// The window of that limit in seconds (`RATE_LIMIT_AUTH_WINDOW_SECS`, default 60).
     pub rate_limit_window_secs: u64,
+    /// The secret of the display calls (`DISPLAY_TOKEN`, at least 32 characters): who sends it as
+    /// `Authorization: Bearer ...` may read the buses, positions, photos and so on. None = those calls are off.
+    pub display_token: Option<String>,
 }
+
+/// The shortest `DISPLAY_TOKEN` the server starts with.
+pub const MIN_DISPLAY_TOKEN_LEN: usize = 32;
 
 /// Where Expo takes push messages.
 const EXPO_PUSH_URL: &str = "https://exp.host/--/api/v2/push/send";
@@ -45,8 +51,21 @@ impl Config {
                 .filter(|t| !t.is_empty()),
             rate_limit_max: number_setting("RATE_LIMIT_AUTH_MAX", 20),
             rate_limit_window_secs: number_setting("RATE_LIMIT_AUTH_WINDOW_SECS", 60),
+            display_token: display_token(std::env::var("DISPLAY_TOKEN").ok()),
         }
     }
+}
+
+/// `DISPLAY_TOKEN`: empty or missing means the display calls are off. A short one is refused at start: it can be guessed.
+fn display_token(token: Option<String>) -> Option<String> {
+    let token = token
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())?;
+    assert!(
+        token.len() >= MIN_DISPLAY_TOKEN_LEN,
+        "DISPLAY_TOKEN must have at least {MIN_DISPLAY_TOKEN_LEN} characters (make one with: openssl rand -hex 32)"
+    );
+    Some(token)
 }
 
 /// A whole-number setting with a default. Panics when it is set to something else than a number.

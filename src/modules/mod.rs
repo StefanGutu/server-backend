@@ -3,6 +3,7 @@
 pub mod auth;
 pub mod charges;
 pub mod devices;
+pub mod display_info;
 pub mod extras;
 pub mod frames;
 pub mod idempotency;

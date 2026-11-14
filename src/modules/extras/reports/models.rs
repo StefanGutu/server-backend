@@ -33,6 +33,13 @@ pub struct Report {
     pub created_at: DateTime<Utc>,
 }
 
+/// The query of `GET /reports`: both parts are optional. `line` is matched in any letter case.
+#[derive(Debug, Default, Deserialize)]
+pub struct ReportFilter {
+    pub line: Option<String>,
+    pub kind: Option<ReportKind>,
+}
+
 /// Body of POST /reports (server-api.md): `{ "kind", "line" }`.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -182,6 +182,11 @@ pub async fn list_catalog(db: &PgPool) -> Result<Vec<PassProduct>, AppError> {
     Ok(repo::list_products(db).await?)
 }
 
+/// One product of the catalog, or NOT_FOUND.
+pub async fn get_product(db: &PgPool, id: Uuid) -> Result<PassProduct, AppError> {
+    repo::find_product(db, id).await?.ok_or(AppError::NotFound)
+}
+
 /// A card or a pass of the user, by id. None if the user has no such item.
 pub async fn find_source(db: &PgPool, user_id: Uuid, id: Uuid) -> Result<Option<Source>, AppError> {
     if let Some(card) = repo::find_card(db, user_id, id).await? {

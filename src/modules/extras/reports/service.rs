@@ -5,7 +5,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::{
-    models::{Report, ReportInput},
+    models::{Report, ReportFilter, ReportInput},
     repo,
 };
 use crate::{
@@ -51,9 +51,10 @@ pub fn pick_bus(heard: &[(i32, String)], line: &str) -> Option<i32> {
         .map(|(bus_id, _)| *bus_id)
 }
 
-/// GET /reports: what has not expired.
-pub async fn list_reports(db: &PgPool) -> Result<Vec<Report>, AppError> {
-    Ok(repo::list_active(db, MAX_REPORTS).await?)
+/// GET /reports: what has not expired, only of the line and kind of the filter when it has them.
+pub async fn list_reports(db: &PgPool, filter: &ReportFilter) -> Result<Vec<Report>, AppError> {
+    let line = filter.line.as_deref().map(clean_line).transpose()?;
+    Ok(repo::list_active(db, MAX_REPORTS, line, filter.kind).await?)
 }
 
 /// POST /reports: the user says something is wrong on a line. The stop is the one nearest to the bus of that

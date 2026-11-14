@@ -31,6 +31,7 @@ pub fn app(state: AppState) -> Router {
         .merge(modules::auth::routes::router(state.clone()))
         .merge(modules::charges::routes::router())
         .merge(modules::devices::routes::router())
+        .merge(modules::display_info::routes::router())
         .merge(modules::extras::notifications::routes::router())
         .merge(modules::extras::reports::routes::router())
         .merge(modules::extras::trips::routes::router())

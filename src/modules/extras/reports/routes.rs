@@ -6,22 +6,25 @@ use axum::{
 use uuid::Uuid;
 
 use super::{
-    models::{Report, ReportInput},
+    models::{Report, ReportFilter, ReportInput},
     service,
 };
 use crate::{
     error::AppError,
-    extract::{ApiJson, ApiPath},
+    extract::{ApiJson, ApiPath, ApiQuery},
     modules::auth::extractor::CurrentUser,
+    modules::display_info::extractor::UserOrDisplay,
     state::AppState,
 };
 
-/// GET /reports: the reports that have not expired, newest first.
+/// GET /reports?line=&kind=: the reports that have not expired, newest first, only of the line and kind given.
+/// The app calls it with a user login, the display with the display token.
 async fn get_reports(
     State(state): State<AppState>,
-    CurrentUser(_user): CurrentUser,
+    _access: UserOrDisplay,
+    ApiQuery(filter): ApiQuery<ReportFilter>,
 ) -> Result<Json<Vec<Report>>, AppError> {
-    Ok(Json(service::list_reports(&state.db).await?))
+    Ok(Json(service::list_reports(&state.db, &filter).await?))
 }
 
 /// POST /reports: `{ "kind", "line" }`, answers the report.

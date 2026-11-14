@@ -10,12 +10,16 @@ pub async fn insert_frame(
     file_path: &str,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO frames (file_path, bus_id, frame_seq, capture_ts) VALUES ($1, $2, $3, $4)",
+        "INSERT INTO frames (file_path, bus_id, frame_seq, capture_ts, route_id, width, height)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
     .bind(file_path)
     .bind(bus_id)
     .bind(meta.seq)
     .bind(meta.capture_ts)
+    .bind(meta.route_id)
+    .bind(i32::try_from(meta.width).unwrap_or(i32::MAX))
+    .bind(i32::try_from(meta.height).unwrap_or(i32::MAX))
     .execute(db)
     .await?;
     Ok(())
