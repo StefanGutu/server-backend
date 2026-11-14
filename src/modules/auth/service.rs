@@ -4,7 +4,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::{
-    models::{Tier, User},
+    models::{PatchMe, SettingsPatch, Tier, User},
     repo,
 };
 use crate::error::AppError;
@@ -39,4 +39,35 @@ pub async fn user_from_test_header(db: &PgPool, header: &str) -> Result<User, Ap
         return Err(AppError::AuthInvalid);
     }
     get_or_create_user(db, test_user_id(header), Tier::Account).await
+}
+
+/// A name is trimmed and must not be blank. `None` means "do not change it".
+pub fn clean_name(name: Option<String>) -> Result<Option<String>, AppError> {
+    match name.map(|n| n.trim().to_string()) {
+        Some(n) if n.is_empty() => Err(AppError::Validation("name must not be empty.".into())),
+        other => Ok(other),
+    }
+}
+
+/// PATCH /me: change the name and/or some settings, return the updated user.
+pub async fn update_me(db: &PgPool, user_id: Uuid, patch: PatchMe) -> Result<User, AppError> {
+    let name = clean_name(patch.name)?;
+    let settings = patch.settings.unwrap_or(SettingsPatch {
+        auto_charge: None,
+        trip_reminders: None,
+        arrival_alerts: None,
+        disruptions: None,
+        location_sharing: None,
+    });
+    repo::update_user(db, user_id, name.as_deref(), &settings)
+        .await?
+        .ok_or(AppError::NotFound)
+}
+
+/// DELETE /me: remove the user.
+pub async fn delete_me(db: &PgPool, user_id: Uuid) -> Result<(), AppError> {
+    match repo::delete_user(db, user_id).await? {
+        true => Ok(()),
+        false => Err(AppError::NotFound),
+    }
 }

@@ -1,6 +1,6 @@
 use sqlx::PgPool;
 
-use super::models::{Device, Route};
+use super::models::{Device, DeviceRole, Route};
 
 /// Returns None when the route does not exist.
 pub async fn find_route(db: &PgPool, route_id: i32) -> Result<Option<Route>, sqlx::Error> {
@@ -10,10 +10,30 @@ pub async fn find_route(db: &PgPool, route_id: i32) -> Result<Option<Route>, sql
         .await
 }
 
+/// The route a bus is planned to run, with its points. None when the bus does not exist.
+pub async fn find_route_of_bus(db: &PgPool, bus_id: i32) -> Result<Option<Route>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT r.route_id, r.name, r.points FROM buses b
+         JOIN routes r ON r.route_id = b.route_id WHERE b.bus_id = $1",
+    )
+    .bind(bus_id)
+    .fetch_optional(db)
+    .await
+}
+
 /// The route a bus is planned to run. None when the bus does not exist.
 pub async fn find_bus_route_id(db: &PgPool, bus_id: i32) -> Result<Option<i32>, sqlx::Error> {
     sqlx::query_scalar("SELECT route_id FROM buses WHERE bus_id = $1")
         .bind(bus_id)
+        .fetch_optional(db)
+        .await
+}
+
+/// The secret of the beacon (Node A) of a bus. None when the bus has no beacon.
+pub async fn find_beacon_secret(db: &PgPool, bus_id: i32) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar("SELECT secret FROM devices WHERE bus_id = $1 AND role = $2")
+        .bind(bus_id)
+        .bind(DeviceRole::Beacon)
         .fetch_optional(db)
         .await
 }

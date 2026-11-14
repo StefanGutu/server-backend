@@ -28,6 +28,8 @@ pub fn app(state: AppState) -> Router {
         .route("/health", get(health))
         .merge(modules::auth::routes::router())
         .merge(modules::devices::routes::router())
+        .merge(modules::rides::routes::router())
+        .merge(modules::sightings::routes::router())
         .merge(modules::telemetry::routes::router())
         .method_not_allowed_fallback(not_found);
     Router::new()

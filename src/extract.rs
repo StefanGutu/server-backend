@@ -1,7 +1,8 @@
 //! Helpers shared by every module's extractors and routes.
 
 use axum::{
-    extract::{FromRequestParts, Path},
+    Json,
+    extract::{FromRequest, FromRequestParts, Path, Request},
     http::{HeaderMap, request::Parts},
 };
 use serde::de::DeserializeOwned;
@@ -24,6 +25,24 @@ where
             .await
             .map(|Path(value)| Self(value))
             .map_err(|_| AppError::Validation("Invalid value in the path.".to_string()))
+    }
+}
+
+/// Same as axum's `Json`, but a bad body gives our JSON error (400 `VALIDATION_ERROR`).
+pub struct ApiJson<T>(pub T);
+
+impl<T, S> FromRequest<S> for ApiJson<T>
+where
+    T: DeserializeOwned,
+    S: Send + Sync,
+{
+    type Rejection = AppError;
+
+    async fn from_request(req: Request, state: &S) -> Result<Self, AppError> {
+        Json::<T>::from_request(req, state)
+            .await
+            .map(|Json(value)| Self(value))
+            .map_err(|e| AppError::Validation(format!("Invalid body: {e}")))
     }
 }
 

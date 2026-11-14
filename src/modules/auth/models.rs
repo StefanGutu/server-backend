@@ -26,6 +26,31 @@ impl Default for Settings {
     }
 }
 
+/// What PATCH /me may change. Only the keys that are sent change, the rest stay.
+/// Unknown keys are an error, so a typo is not silently ignored.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SettingsPatch {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_charge: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub trip_reminders: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub arrival_alerts: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disruptions: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location_sharing: Option<bool>,
+}
+
+/// Body of PATCH /me (server-api.md): `{ "name?", "settings?" }`.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PatchMe {
+    pub name: Option<String>,
+    pub settings: Option<SettingsPatch>,
+}
+
 /// anonymous: device login only, cannot pay. account: linked to a phone/google/apple identity.
 /// Stored as text in `users.tier`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, sqlx::Type)]
