@@ -29,26 +29,45 @@ pub fn display_token_matches(configured: &str, authorization: &str) -> bool {
 /// `DISPLAY_TOKEN` not set: every call is 401 (the display calls are off).
 pub struct DisplayAccess;
 
-fn has_display_token(parts: &Parts, state: &AppState) -> bool {
+/// Why a call has no display access, for the log. `None` when it has it. Never says the token.
+fn refusal(parts: &Parts, state: &AppState) -> Option<&'static str> {
     let Some(configured) = state.config.display_token.as_deref() else {
-        return false;
+        return Some(
+            "DISPLAY_TOKEN is not set in .env (or the server was started before it was added): the display calls are off",
+        );
     };
-    parts
+    let Some(header) = parts
         .headers
         .get(AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
-        .is_some_and(|header| display_token_matches(configured, header))
+    else {
+        return Some("there is no Authorization header (a browser does not send one)");
+    };
+    if bearer_token(header).is_none() {
+        return Some("the Authorization header is not `Bearer <token>`");
+    }
+    if display_token_matches(configured, header) {
+        None
+    } else {
+        Some("the token is not the DISPLAY_TOKEN of this server")
+    }
+}
+
+fn has_display_token(parts: &Parts, state: &AppState) -> bool {
+    refusal(parts, state).is_none()
 }
 
 impl FromRequestParts<AppState> for DisplayAccess {
     type Rejection = AppError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, AppError> {
-        if has_display_token(parts, state) {
-            return Ok(Self);
+        match refusal(parts, state) {
+            None => Ok(Self),
+            Some(reason) => {
+                tracing::warn!(path = %parts.uri.path(), "display call refused: {reason}");
+                Err(AppError::AuthInvalid)
+            }
         }
-        tracing::warn!(path = %parts.uri.path(), "display call refused: no display token, or a wrong one");
-        Err(AppError::AuthInvalid)
     }
 }
 

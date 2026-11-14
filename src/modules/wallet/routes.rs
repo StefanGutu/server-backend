@@ -18,6 +18,7 @@ use super::{
 use crate::{
     error::AppError,
     extract::{ApiJson, ApiPath, parse_json_body, run_to_the_end},
+    modules::display_info::extractor::UserOrDisplay,
     modules::{auth::extractor::CurrentUser, idempotency},
     state::AppState,
 };
@@ -30,10 +31,11 @@ async fn get_items(
     Ok(Json(service::list_items(&state.db, user.id).await?))
 }
 
-/// GET /passes/catalog: the passes that can be bought.
+/// GET /passes/catalog: the passes that can be bought. The app calls it with a user login, the display with the
+/// display token.
 async fn get_catalog(
     State(state): State<AppState>,
-    CurrentUser(_user): CurrentUser,
+    _access: UserOrDisplay,
 ) -> Result<Json<Vec<PassProduct>>, AppError> {
     Ok(Json(service::list_catalog(&state.db).await?))
 }
