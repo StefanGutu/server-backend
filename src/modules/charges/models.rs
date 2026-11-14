@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::extract::{ron_from_bani, utc_seconds, utc_seconds_opt};
 
 /// State of a charge. Stored as text in `charges.status`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, sqlx::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize, sqlx::Type)]
 #[serde(rename_all = "snake_case")]
 #[sqlx(type_name = "text", rename_all = "snake_case")]
 pub enum ChargeStatus {
@@ -132,6 +132,8 @@ pub struct NewCharge {
     pub started_at: DateTime<Utc>,
     /// Set for a charge that is over at once (the purchase of a pass).
     pub ended_at: Option<DateTime<Utc>>,
+    /// The catalog product a pass purchase bought (kept for the display info). None for a ride.
+    pub pass_product_id: Option<Uuid>,
 }
 
 /// Body of POST /tickets/verify.

@@ -86,3 +86,23 @@ impl FromRequestParts<AppState> for UserOrDisplay {
             .map(|_| Self)
     }
 }
+
+/// Who made a call that the app and the display both make (`GET /charges`, `GET /reports`): the display
+/// (the display token) or a user (their login).
+pub enum Caller {
+    Display,
+    User(crate::modules::auth::models::User),
+}
+
+impl FromRequestParts<AppState> for Caller {
+    type Rejection = AppError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, AppError> {
+        if has_display_token(parts, state) {
+            return Ok(Self::Display);
+        }
+        CurrentUser::from_request_parts(parts, state)
+            .await
+            .map(|CurrentUser(user)| Self::User(user))
+    }
+}

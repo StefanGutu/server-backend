@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::models::{Report, ReportKind};
+use super::models::{Report, ReportKind, StopFound};
 
 /// The columns of a `Report`, with the number of confirmations counted.
 macro_rules! select_report {
@@ -69,16 +69,22 @@ pub async fn insert_report(
     id: Uuid,
     kind: ReportKind,
     line: &str,
-    stop_name: &str,
+    stop: &StopFound,
+    reporter_user_id: Uuid,
     expires_at: DateTime<Utc>,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO reports (id, kind, line, stop_name, expires_at) VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO reports (id, kind, line, stop_name, bus_id, stop_lat, stop_lon, reporter_user_id, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     )
     .bind(id)
     .bind(kind)
     .bind(line)
-    .bind(stop_name)
+    .bind(&stop.stop_name)
+    .bind(stop.bus_id)
+    .bind(stop.lat)
+    .bind(stop.lon)
+    .bind(reporter_user_id)
     .bind(expires_at)
     .execute(db)
     .await?;

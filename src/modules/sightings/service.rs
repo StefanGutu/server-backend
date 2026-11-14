@@ -8,7 +8,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::{
-    models::{Outcome, Sighting},
+    models::{Outcome, RejectReason, Sighting},
     repo,
 };
 use crate::{
@@ -72,6 +72,46 @@ pub fn check_token(secret: &str, bus_id: i32, slot: i64, token_hex: &str, now: i
         Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
     mac.update(format!("{bus_id}.{slot}").as_bytes());
     mac.verify_truncated_left(&token).is_ok()
+}
+
+/// Why a sighting is refused, or None when it is good. `secret` is the beacon secret of the bus (None: no beacon),
+/// `bus_exists` tells an unknown bus from a bus with no beacon. `now` is unix seconds. Pure.
+pub fn reject_reason(
+    s: &Sighting,
+    secret: Option<&str>,
+    bus_exists: bool,
+    now: i64,
+) -> Option<RejectReason> {
+    if !s.clock_synced {
+        return Some(RejectReason::ClockNotSynced);
+    }
+    let Some(secret) = secret else {
+        return Some(if bus_exists {
+            RejectReason::NoBeacon
+        } else {
+            RejectReason::UnknownBus
+        });
+    };
+    let current_slot = now / SLOT_SECS;
+    if s.slot < current_slot - MAX_SLOTS_OLD {
+        return Some(RejectReason::SlotTooOld);
+    }
+    if s.slot > current_slot + MAX_SLOTS_AHEAD {
+        return Some(RejectReason::SlotAhead);
+    }
+    if check_token(secret, s.bus_id, s.slot, &s.token, now) {
+        None
+    } else {
+        Some(RejectReason::BadToken)
+    }
+}
+
+/// Keeps the newest sightings of the log (all users together); the older ones are deleted.
+pub const MAX_LOGGED_SIGHTINGS: i64 = 20_000;
+
+/// Deletes the oldest entries of the sighting log beyond `MAX_LOGGED_SIGHTINGS` (called by the background task).
+pub async fn delete_old_log(db: &PgPool) -> Result<u64, AppError> {
+    Ok(repo::delete_log_beyond_newest(db, MAX_LOGGED_SIGHTINGS).await?)
 }
 
 /// How far back (in slots, 120 = 1 hour) we look at what the user heard. Long enough to see
@@ -188,20 +228,18 @@ pub async fn handle(
     allow_sim: bool,
 ) -> Result<Outcome, AppError> {
     validate(s)?;
-    if !s.clock_synced {
-        return Ok(Outcome::Rejected);
-    }
+    let now = chrono::Utc::now().timestamp();
     // A bus that does not exist has no beacon, so no token can have come from it.
-    let Some(secret) = devices::service::beacon_secret(db, s.bus_id).await? else {
-        return Ok(Outcome::Rejected);
-    };
-    if !check_token(
-        &secret,
-        s.bus_id,
-        s.slot,
-        &s.token,
-        chrono::Utc::now().timestamp(),
-    ) {
+    let secret = devices::service::beacon_secret(db, s.bus_id).await?;
+    let bus_exists = secret.is_some() || devices::service::bus_line(db, s.bus_id).await?.is_some();
+    let reason = reject_reason(s, secret.as_deref(), bus_exists, now);
+
+    // Every sighting that reached the server is noted, the refused ones with the reason. Only the display info reads
+    // this log, so a failure to write it must not change the answer.
+    if let Err(e) = repo::log_attempt(db, user_id, s, s.slot - now / SLOT_SECS, reason).await {
+        tracing::warn!("cannot note the sighting in the log: {e}");
+    }
+    if reason.is_some() {
         return Ok(Outcome::Rejected);
     }
     repo::insert_if_new(db, user_id, s).await?;

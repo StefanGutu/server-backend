@@ -79,7 +79,13 @@ pub async fn run_once(db: &PgPool, allow_sim: bool) -> Result<(), AppError> {
                 telemetry::service::bus_movement_m(db, ride.bus_id, heard_until, now, allow_sim)
                     .await?,
             );
-        if (silent_too_long || kept_moving) && rides::service::end_ride(db, ride.id).await? {
+        let reason = if silent_too_long {
+            "silence_60min"
+        } else {
+            "silence_90s"
+        };
+        if (silent_too_long || kept_moving) && rides::service::end_ride(db, ride.id, reason).await?
+        {
             // The ride is over, so its charge is too: it gets an end and is completed.
             let completed = charges::service::complete_ride_charge(db, ride.id).await?;
             tracing::info!(
@@ -96,6 +102,10 @@ pub async fn run_once(db: &PgPool, allow_sim: bool) -> Result<(), AppError> {
     let forgotten = auth::service::delete_expired_refresh_tokens(db).await?;
     if forgotten > 0 {
         tracing::info!(forgotten, "expired refresh tokens deleted");
+    }
+    let old_sightings = sightings::service::delete_old_log(db).await?;
+    if old_sightings > 0 {
+        tracing::info!(old_sightings, "old entries of the sighting log deleted");
     }
     let old_positions = telemetry::service::delete_old_positions(db).await?;
     if old_positions > 0 {

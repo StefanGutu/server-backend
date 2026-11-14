@@ -7,7 +7,7 @@ use crate::{extract::utc_seconds, modules::charges::models::Charge};
 
 /// The `status` of a ride (server-api.md section 2). Stored as text in `ride_sessions.status`
 /// (`None` is never stored: it means "no row").
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, sqlx::Type)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize, sqlx::Type)]
 #[serde(rename_all = "snake_case")]
 #[sqlx(type_name = "text", rename_all = "snake_case")]
 pub enum RideStatus {
@@ -150,4 +150,16 @@ pub struct ConfirmInput {
     pub source_id: Option<Uuid>,
     /// Required only when the ride has `candidates`: the bus the user is on.
     pub bus_id: Option<i32>,
+}
+
+/// What made a ride go from `pending` to `awaiting_confirmation`, kept for the display info.
+#[derive(Debug, Clone, PartialEq)]
+pub enum OfferedBy {
+    /// The user said "I am on the bus".
+    User,
+    /// The sightings: the user was heard `slots_in_row` slots in a row and the bus moved `distance_m` metres.
+    Sightings {
+        slots_in_row: usize,
+        distance_m: i64,
+    },
 }

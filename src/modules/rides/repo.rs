@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgPool, types::Json};
 use uuid::Uuid;
 
-use super::models::{Candidate, PaymentReason, RideRef, RideSession, RideStatus};
+use super::models::{Candidate, OfferedBy, PaymentReason, RideRef, RideSession, RideStatus};
 
 /// The latest ride of a user, or None when the user never had one.
 pub async fn find_current_session(
@@ -50,11 +50,22 @@ pub async fn offer_ride(
     bus_id: i32,
     candidates: &[Candidate],
     expires_at: DateTime<Utc>,
+    how: &OfferedBy,
 ) -> Result<bool, sqlx::Error> {
+    let (manual, qualification) = match how {
+        OfferedBy::User => (true, None),
+        OfferedBy::Sightings {
+            slots_in_row,
+            distance_m,
+        } => (
+            false,
+            Some(serde_json::json!({ "slots_in_row": slots_in_row, "distance_m": distance_m })),
+        ),
+    };
     let result = sqlx::query(
         "UPDATE ride_sessions
          SET status = $2, bus_id = $3, candidates = $4, expires_at = $5,
-             version = version + 1, updated_at = now()
+             manual = $7, qualification = $8, version = version + 1, updated_at = now()
          WHERE id = $1 AND status = $6",
     )
     .bind(session_id)
@@ -63,6 +74,8 @@ pub async fn offer_ride(
     .bind(Json(candidates))
     .bind(expires_at)
     .bind(RideStatus::Pending)
+    .bind(manual)
+    .bind(qualification)
     .execute(db)
     .await?;
     Ok(result.rows_affected() == 1)
@@ -74,7 +87,7 @@ pub async fn offer_ride(
 /// so the app's ETag changes.
 pub async fn reject_expired(db: &PgPool) -> Result<u64, sqlx::Error> {
     let result = sqlx::query(
-        "UPDATE ride_sessions SET status = $1, version = version + 1, updated_at = now()
+        "UPDATE ride_sessions SET status = $1, end_reason = 'timeout', version = version + 1, updated_at = now()
          WHERE status IN ($2, $3) AND expires_at < now()",
     )
     .bind(RideStatus::Rejected)
@@ -101,14 +114,16 @@ pub async fn change_status(
     session_id: Uuid,
     from: RideStatus,
     to: RideStatus,
+    end_reason: &str,
 ) -> Result<bool, sqlx::Error> {
     let result = sqlx::query(
-        "UPDATE ride_sessions SET status = $3, version = version + 1, updated_at = now()
+        "UPDATE ride_sessions SET status = $3, end_reason = $4, version = version + 1, updated_at = now()
          WHERE id = $1 AND status = $2",
     )
     .bind(session_id)
     .bind(from)
     .bind(to)
+    .bind(end_reason)
     .execute(db)
     .await?;
     Ok(result.rows_affected() == 1)
@@ -189,7 +204,7 @@ pub async fn confirm_session(
 /// ride was none of these.
 pub async fn reject_open_session(db: &PgPool, session_id: Uuid) -> Result<bool, sqlx::Error> {
     let result = sqlx::query(
-        "UPDATE ride_sessions SET status = $2, version = version + 1, updated_at = now()
+        "UPDATE ride_sessions SET status = $2, end_reason = 'declined', version = version + 1, updated_at = now()
          WHERE id = $1 AND (status = $3 OR status = $4 OR status = $5)",
     )
     .bind(session_id)
@@ -214,8 +229,8 @@ pub async fn insert_awaiting(
 ) -> Result<Option<Uuid>, sqlx::Error> {
     let id = Uuid::new_v4();
     let result = sqlx::query(
-        "INSERT INTO ride_sessions (id, user_id, bus_id, status, candidates, expires_at)
-         VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING",
+        "INSERT INTO ride_sessions (id, user_id, bus_id, status, candidates, expires_at, manual)
+         VALUES ($1, $2, $3, $4, $5, $6, true) ON CONFLICT DO NOTHING",
     )
     .bind(id)
     .bind(user_id)

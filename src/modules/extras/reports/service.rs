@@ -5,7 +5,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::{
-    models::{Report, ReportFilter, ReportInput},
+    models::{Report, ReportFilter, ReportInput, StopFound},
     repo,
 };
 use crate::{
@@ -67,15 +67,15 @@ pub async fn create_report(
     allow_sim: bool,
 ) -> Result<Report, AppError> {
     let line = clean_line(&input.line)?;
-    let (line, stop_name) = find_stop(db, user_id, line, allow_sim).await?;
+    let stop = find_stop(db, user_id, line, allow_sim).await?;
 
-    let id = match repo::find_same(db, input.kind, &line, &stop_name).await? {
+    let id = match repo::find_same(db, input.kind, &stop.line, &stop.stop_name).await? {
         Some(existing) => existing,
         None => {
             let id = Uuid::now_v7();
             let expires_at = Utc::now() + chrono::Duration::seconds(REPORT_LIFETIME_SECS);
-            repo::insert_report(db, id, input.kind, &line, &stop_name, expires_at).await?;
-            tracing::info!(report_id = %id, kind = ?input.kind, line = %line, stop = %stop_name, "report made");
+            repo::insert_report(db, id, input.kind, &stop.line, &stop, user_id, expires_at).await?;
+            tracing::info!(report_id = %id, kind = ?input.kind, line = %stop.line, stop = %stop.stop_name, "report made");
             id
         }
     };
@@ -104,13 +104,13 @@ pub async fn delete_expired(db: &PgPool) -> Result<u64, AppError> {
     Ok(repo::delete_expired(db).await?)
 }
 
-/// The name of the line (as the route calls it) and the stop nearest to the user's bus of that line.
+/// The line (as the route calls it) and the stop nearest to the user's bus of that line.
 async fn find_stop(
     db: &PgPool,
     user_id: Uuid,
     line: &str,
     allow_sim: bool,
-) -> Result<(String, String), AppError> {
+) -> Result<StopFound, AppError> {
     let no_bus = || {
         AppError::Unprocessable(format!(
             "You have not been on a bus of line {line} in the last 10 minutes."
@@ -150,5 +150,17 @@ async fn find_stop(
         .ok_or(AppError::NotFound)?;
     let stop = nearest_stop(&route.points.0, position)
         .ok_or_else(|| AppError::Unprocessable("The line has no stop.".to_string()))?;
-    Ok((line_name, stop.to_string()))
+    // The stop's own place (the first point of the route with that name).
+    let point = route
+        .points
+        .0
+        .iter()
+        .find(|p| p.name.as_deref() == Some(stop));
+    Ok(StopFound {
+        line: line_name,
+        stop_name: stop.to_string(),
+        bus_id,
+        lat: point.map_or(position.0, |p| p.lat),
+        lon: point.map_or(position.1, |p| p.lon),
+    })
 }

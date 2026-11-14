@@ -5,27 +5,60 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use serde::Deserialize;
+use uuid::Uuid;
 
 use super::{
-    models::{Charge, PublicKeysResponse, VerifyAnswer, VerifyInput},
+    models::{ChargeStatus, PublicKeysResponse, VerifyAnswer, VerifyInput},
     service,
 };
 use crate::{
     error::AppError,
     extract::{ApiJson, ApiPath, ApiQuery, ListQuery},
-    modules::auth::extractor::CurrentUser,
+    modules::{
+        auth::extractor::CurrentUser,
+        display_info::{self, admin_models::ChargesQuery, extractor::Caller},
+    },
     state::AppState,
 };
 
-/// GET /charges?limit=&before=: the charges of the logged-in user, newest first.
+/// The query of `GET /charges`. The app uses `limit` and `before`; the display uses `limit`, `offset`, `user_id` and
+/// `status` (they are plain fields in one struct: a `flatten` would not read numbers from a URL).
+#[derive(Debug, Deserialize)]
+struct ChargesCallQuery {
+    limit: Option<i64>,
+    before: Option<Uuid>,
+    offset: Option<i64>,
+    user_id: Option<Uuid>,
+    status: Option<ChargeStatus>,
+}
+
+/// GET /charges?limit=&before=: the charges of the logged-in user, newest first. With the display token it is the
+/// display's list instead: the charges of everyone, with more about each (see `api-display.md`).
 async fn get_charges(
     State(state): State<AppState>,
-    CurrentUser(user): CurrentUser,
-    ApiQuery(query): ApiQuery<ListQuery>,
-) -> Result<Json<Vec<Charge>>, AppError> {
-    Ok(Json(
-        service::list_charges(&state.db, user.id, &query).await?,
-    ))
+    caller: Caller,
+    ApiQuery(query): ApiQuery<ChargesCallQuery>,
+) -> Result<Response, AppError> {
+    Ok(match caller {
+        Caller::User(user) => {
+            let list = ListQuery {
+                limit: query.limit,
+                before: query.before,
+            };
+            Json(service::list_charges(&state.db, user.id, &list).await?).into_response()
+        }
+        Caller::Display => {
+            let display = ChargesQuery {
+                user_id: query.user_id,
+                status: query.status,
+                limit: query.limit,
+                offset: query.offset,
+            };
+            Json(display_info::admin_service::list_charges(&state.db, &display).await?)
+                .into_response()
+        }
+    })
 }
 
 /// GET /tickets/public-key: `{ "keys": [{ "kid", "alg": "EdDSA", "publicKey" }] }`.

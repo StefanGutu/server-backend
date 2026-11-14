@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::models::{ChargeRow, ChargeStatus, NewCharge, TicketKey};
+use super::models::{ChargeRow, ChargeStatus, NewCharge, TicketKey, VerifyAnswer};
 
 /// Where a list continues: the (started_at, id) of one charge.
 pub type Cursor = (DateTime<Utc>, Uuid);
@@ -75,8 +75,8 @@ pub async fn insert_charge(
 ) -> Result<ChargeRow, sqlx::Error> {
     sqlx::query_as(
         "INSERT INTO charges (id, user_id, session_id, line, destination, amount_bani, status, paid_with,
-                              passengers, started_at, ended_at, qr_token)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                              passengers, started_at, ended_at, qr_token, pass_product_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
          RETURNING id, user_id, session_id, line, destination, amount_bani, status, paid_with,
                    passengers, started_at, ended_at, qr_token",
     )
@@ -92,8 +92,32 @@ pub async fn insert_charge(
     .bind(new.started_at)
     .bind(new.ended_at)
     .bind(qr_token)
+    .bind(new.pass_product_id)
     .fetch_one(db)
     .await
+}
+
+/// Notes a check of a ticket by an inspector (for the display info).
+pub async fn insert_verification(
+    db: &PgPool,
+    inspector_id: Uuid,
+    charge_id: Option<Uuid>,
+    answer: &VerifyAnswer,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO ticket_verifications (inspector_id, charge_id, valid, paid, line, passengers, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+    )
+    .bind(inspector_id)
+    .bind(charge_id)
+    .bind(answer.valid)
+    .bind(answer.paid)
+    .bind(&answer.line)
+    .bind(answer.passengers)
+    .bind(answer.expires_at)
+    .execute(db)
+    .await?;
+    Ok(())
 }
 
 /// The newest charge of a ride, or None.

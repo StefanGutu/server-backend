@@ -143,4 +143,5 @@ pub fn router() -> Router<AppState> {
         )
         .route("/buses/{bus_id}/occupancy", get(get_occupancy))
         .route("/passes/catalog/{product_id}", get(get_product))
+        .merge(super::admin_routes::router())
 }

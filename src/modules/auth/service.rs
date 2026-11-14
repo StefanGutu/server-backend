@@ -45,7 +45,16 @@ pub async fn user_from_test_header(db: &PgPool, header: &str) -> Result<User, Ap
     if header.trim().is_empty() {
         return Err(AppError::AuthInvalid);
     }
-    get_or_create_user(db, test_user_id(header), Tier::Account).await
+    let user = get_or_create_user(db, test_user_id(header), Tier::Account).await?;
+    note_seen(db, user.id).await;
+    Ok(user)
+}
+
+/// Notes that the user was seen. A failure is only logged: it must never refuse a call.
+async fn note_seen(db: &PgPool, user_id: Uuid) {
+    if let Err(e) = repo::touch_user(db, user_id).await {
+        tracing::warn!(%user_id, "cannot note that the user was seen: {e}");
+    }
 }
 
 /// The user behind an `Authorization: Bearer <accessToken>` header. `AUTH_INVALID` when the header
@@ -58,9 +67,11 @@ pub async fn user_from_authorization(
     let access_token = token::bearer_token(header).ok_or(AppError::AuthInvalid)?;
     let user_id = token::verify_access(jwt_secret, access_token, Utc::now().timestamp())
         .ok_or(AppError::AuthInvalid)?;
-    repo::find_user(db, user_id)
+    let user = repo::find_user(db, user_id)
         .await?
-        .ok_or(AppError::AuthInvalid)
+        .ok_or(AppError::AuthInvalid)?;
+    note_seen(db, user.id).await;
+    Ok(user)
 }
 
 /// A new pair of tokens for this user: the reply for the app, and the hash and the end of the

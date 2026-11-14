@@ -211,7 +211,7 @@ pub async fn rotate_refresh_token(
 ) -> Result<bool, sqlx::Error> {
     let mut tx = db.begin().await?;
     let revoked = sqlx::query(
-        "UPDATE refresh_tokens SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL",
+        "UPDATE refresh_tokens SET revoked_at = now(), revoked_reason = 'rotated' WHERE id = $1 AND revoked_at IS NULL",
     )
     .bind(old_id)
     .execute(&mut *tx)
@@ -241,6 +241,18 @@ pub async fn device_has_working_token(
     .await
 }
 
+/// Notes that the user was seen now. At most once a minute, so a busy user is not one write per call.
+pub async fn touch_user(db: &PgPool, user_id: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE users SET last_seen_at = now()
+         WHERE id = $1 AND (last_seen_at IS NULL OR last_seen_at < now() - interval '1 minute')",
+    )
+    .bind(user_id)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
 /// Revokes every refresh token of this user on this device that still works. Returns how many.
 pub async fn revoke_device_tokens(
     db: &PgPool,
@@ -248,7 +260,7 @@ pub async fn revoke_device_tokens(
     device_id: &str,
 ) -> Result<u64, sqlx::Error> {
     let result = sqlx::query(
-        "UPDATE refresh_tokens SET revoked_at = now() WHERE user_id = $1 AND device_id = $2 AND revoked_at IS NULL",
+        "UPDATE refresh_tokens SET revoked_at = now(), revoked_reason = 'token_reuse' WHERE user_id = $1 AND device_id = $2 AND revoked_at IS NULL",
     )
     .bind(user_id)
     .bind(device_id)
@@ -268,7 +280,7 @@ pub async fn delete_expired_refresh_tokens(db: &PgPool) -> Result<u64, sqlx::Err
 /// Revokes every refresh token of this user that still works, on every device. Returns how many.
 pub async fn revoke_user_tokens(db: &PgPool, user_id: Uuid) -> Result<u64, sqlx::Error> {
     let result = sqlx::query(
-        "UPDATE refresh_tokens SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL",
+        "UPDATE refresh_tokens SET revoked_at = now(), revoked_reason = 'logout' WHERE user_id = $1 AND revoked_at IS NULL",
     )
     .bind(user_id)
     .execute(db)

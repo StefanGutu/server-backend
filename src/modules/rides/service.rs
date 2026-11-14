@@ -6,8 +6,8 @@ use uuid::Uuid;
 
 use super::{
     models::{
-        BusEvidence, Candidate, ConfirmInput, Payment, PaymentReason, Ride, RideRef, RideReply,
-        RideSession, RideStatus, Vehicle,
+        BusEvidence, Candidate, ConfirmInput, OfferedBy, Payment, PaymentReason, Ride, RideRef,
+        RideReply, RideSession, RideStatus, Vehicle,
     },
     repo,
 };
@@ -299,7 +299,13 @@ pub async fn update_from_sightings(
             Some(session),
         ) => {
             let candidates = candidates_for(db, &candidate_bus_ids).await?;
-            if repo::offer_ride(db, session.id, bus_id, &candidates, expires_at).await? {
+            // What qualified the ride: how long the user was heard and how far the bus moved (of the chosen bus).
+            let chosen = evidence.iter().find(|e| e.bus_id == bus_id);
+            let how = OfferedBy::Sightings {
+                slots_in_row: chosen.map_or(0, |e| e.run_len),
+                distance_m: chosen.map_or(0, |e| e.moved_m.round() as i64),
+            };
+            if repo::offer_ride(db, session.id, bus_id, &candidates, expires_at, &how).await? {
                 // The app may be closed: tell the phone. Only the call that changed the ride sends it.
                 let awaiting = Push::new(PushType::AwaitingConfirmation, session.id);
                 notifications::service::send_push(db, push, user_id, awaiting).await;
@@ -344,13 +350,28 @@ pub fn silent_past_ticket(heard_until: i64, now: i64) -> bool {
 }
 
 /// confirmed -> ended. False when the ride was no longer `confirmed`.
-pub async fn end_ride(db: &PgPool, session_id: Uuid) -> Result<bool, AppError> {
-    Ok(repo::change_status(db, session_id, RideStatus::Confirmed, RideStatus::Ended).await?)
+/// `reason` is `silence_90s` or `silence_60min` (kept for the display info).
+pub async fn end_ride(db: &PgPool, session_id: Uuid, reason: &str) -> Result<bool, AppError> {
+    Ok(repo::change_status(
+        db,
+        session_id,
+        RideStatus::Confirmed,
+        RideStatus::Ended,
+        reason,
+    )
+    .await?)
 }
 
 /// pending -> rejected: the user never boarded. False when the ride was no longer `pending`.
 pub async fn reject_pending_ride(db: &PgPool, session_id: Uuid) -> Result<bool, AppError> {
-    Ok(repo::change_status(db, session_id, RideStatus::Pending, RideStatus::Rejected).await?)
+    Ok(repo::change_status(
+        db,
+        session_id,
+        RideStatus::Pending,
+        RideStatus::Rejected,
+        "not_boarded",
+    )
+    .await?)
 }
 
 /// Price of one person for one ride: 5 lei (PLAN.md step 19).
@@ -626,6 +647,7 @@ async fn confirm_locked(
             passengers: input.passengers,
             started_at: Utc::now(),
             ended_at: None,
+            pass_product_id: None,
         },
     )
     .await?;
@@ -769,7 +791,15 @@ pub async fn start_manual_ride(
         ManualAction::Nothing => {}
         ManualAction::OfferPending => {
             if let Some(session) = &current
-                && repo::offer_ride(db, session.id, bus_id, &candidates, expires_at).await?
+                && repo::offer_ride(
+                    db,
+                    session.id,
+                    bus_id,
+                    &candidates,
+                    expires_at,
+                    &OfferedBy::User,
+                )
+                .await?
             {
                 let awaiting = Push::new(PushType::AwaitingConfirmation, session.id);
                 notifications::service::send_push(db, push, user_id, awaiting).await;
@@ -784,7 +814,7 @@ pub async fn start_manual_ride(
             } else if let Some(session) = repo::find_current_session(db, user_id).await?
                 && session.status == RideStatus::Pending
                 // The sightings of this user may have started a `pending` ride a moment ago: use it.
-                && repo::offer_ride(db, session.id, bus_id, &candidates, expires_at).await?
+                && repo::offer_ride(db, session.id, bus_id, &candidates, expires_at, &OfferedBy::User).await?
             {
                 let awaiting = Push::new(PushType::AwaitingConfirmation, session.id);
                 notifications::service::send_push(db, push, user_id, awaiting).await;

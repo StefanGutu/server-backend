@@ -26,3 +26,27 @@ pub enum Outcome {
     /// 422: wrong or old token, unsynced phone clock, or a bus with no beacon.
     Rejected,
 }
+
+/// Why a sighting was refused (kept in the sighting log for the display info).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RejectReason {
+    BadToken,
+    SlotTooOld,
+    SlotAhead,
+    ClockNotSynced,
+    UnknownBus,
+    NoBeacon,
+}
+
+impl RejectReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::BadToken => "bad_token",
+            Self::SlotTooOld => "slot_too_old",
+            Self::SlotAhead => "slot_ahead",
+            Self::ClockNotSynced => "clock_not_synced",
+            Self::UnknownBus => "unknown_bus",
+            Self::NoBeacon => "no_beacon",
+        }
+    }
+}

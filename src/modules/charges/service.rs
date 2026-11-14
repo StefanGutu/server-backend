@@ -156,5 +156,10 @@ pub async fn verify_ticket(
         charge_status,
     );
     tracing::info!(inspector_id = %inspector.id, valid = answer.valid, paid = answer.paid, "ticket checked");
+    // The scan log is only for the display info: a failure to write it must not refuse the check.
+    let charge_id = claims.as_ref().map(|c| c.cid);
+    if let Err(e) = repo::insert_verification(db, inspector.id, charge_id, &answer).await {
+        tracing::warn!("cannot note the ticket check: {e}");
+    }
     Ok(answer)
 }

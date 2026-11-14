@@ -343,6 +343,7 @@ async fn renew_locked(
             passengers: 1,
             started_at: now,
             ended_at: Some(now),
+            pass_product_id: Some(product.id),
         },
     )
     .await?;

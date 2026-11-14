@@ -233,7 +233,7 @@ pub async fn renew_pass(
     lines: &PassLines,
 ) -> Result<Option<PassRow>, sqlx::Error> {
     sqlx::query_as(concat!(
-        "UPDATE passes SET valid_from = $3, valid_until = $4, lines = $5 WHERE id = $1 AND user_id = $2 RETURNING ",
+        "UPDATE passes SET valid_from = $3, valid_until = $4, lines = $5, last_renewed_at = now() WHERE id = $1 AND user_id = $2 RETURNING ",
         pass_columns!()
     ))
     .bind(pass_id)

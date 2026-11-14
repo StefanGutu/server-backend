@@ -1,7 +1,7 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use super::models::Sighting;
+use super::models::{RejectReason, Sighting};
 
 /// (bus_id, slot) of the user's sightings from `since_slot` on.
 pub async fn recent_sightings(
@@ -67,4 +67,40 @@ pub async fn insert_if_new(db: &PgPool, user_id: Uuid, s: &Sighting) -> Result<(
     .execute(db)
     .await?;
     Ok(())
+}
+
+/// Notes a sighting in the log, accepted (`reject` is None) or refused with its reason.
+pub async fn log_attempt(
+    db: &PgPool,
+    user_id: Uuid,
+    s: &Sighting,
+    slot_offset: i64,
+    reject: Option<RejectReason>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO sighting_log (user_id, bus_id, slot, slot_offset, rssi, clock_synced, accepted, reject_reason)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+    )
+    .bind(user_id)
+    .bind(s.bus_id)
+    .bind(s.slot)
+    .bind(slot_offset)
+    .bind(s.rssi)
+    .bind(s.clock_synced)
+    .bind(reject.is_none())
+    .bind(reject.map(RejectReason::as_str))
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// Deletes the oldest entries of the log, keeping the newest `keep`. Returns how many.
+pub async fn delete_log_beyond_newest(db: &PgPool, keep: i64) -> Result<u64, sqlx::Error> {
+    let result = sqlx::query(
+        "DELETE FROM sighting_log WHERE id < (SELECT id FROM sighting_log ORDER BY id DESC OFFSET $1 LIMIT 1)",
+    )
+    .bind(keep)
+    .execute(db)
+    .await?;
+    Ok(result.rows_affected())
 }
