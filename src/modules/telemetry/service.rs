@@ -62,6 +62,41 @@ async fn warn_if_route_differs(db: &PgPool, t: &Telemetry) -> Result<(), AppErro
     Ok(())
 }
 
+const EARTH_RADIUS_M: f64 = 6_371_000.0;
+
+/// Distance in metres between two (lat, lon) points in degrees (haversine formula).
+pub fn distance_m(a: (f64, f64), b: (f64, f64)) -> f64 {
+    let (lat_a, lat_b) = (a.0.to_radians(), b.0.to_radians());
+    let d_lat = lat_b - lat_a;
+    let d_lon = (b.1 - a.1).to_radians();
+    let h = (d_lat / 2.0).sin().powi(2) + lat_a.cos() * lat_b.cos() * (d_lon / 2.0).sin().powi(2);
+    2.0 * EARTH_RADIUS_M * h.sqrt().asin()
+}
+
+/// How far the bus got from its first position. The furthest point is used (not the last
+/// one), so a bus that went out and came back still counts as moving, and GPS noise
+/// while it stands still does not add up. 0 for fewer than two positions.
+pub fn max_distance_from_first_m(positions: &[(f64, f64)]) -> f64 {
+    let Some(&first) = positions.first() else {
+        return 0.0;
+    };
+    positions.iter().map(|&p| distance_m(first, p)).fold(0.0, f64::max)
+}
+
+/// How many metres a bus moved between two unix times (by the time the server received
+/// the positions). `allow_sim`: also count simulator positions (test mode only, because
+/// nobody is charged on a simulated position in production).
+pub async fn bus_movement_m(
+    db: &PgPool,
+    bus_id: i32,
+    from_epoch: i64,
+    to_epoch: i64,
+    allow_sim: bool,
+) -> Result<f64, AppError> {
+    let positions = repo::fix_positions(db, bus_id, from_epoch, to_epoch, allow_sim).await?;
+    Ok(max_distance_from_first_m(&positions))
+}
+
 /// Whole flow: parse, check, store. Duplicates are fine (stored once, still Ok).
 pub async fn handle(db: &PgPool, device: &Device, url_bus_id: i32, body: &[u8]) -> Result<(), AppError> {
     let telemetry = parse(body)?;

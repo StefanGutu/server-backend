@@ -2,6 +2,30 @@ use sqlx::PgPool;
 
 use super::models::Telemetry;
 
+/// GPS positions (lat, lon) of a bus received in [from_epoch, to_epoch), oldest first.
+/// Only messages with a GPS fix; simulator messages (`sim = 1`) only when `allow_sim`.
+pub async fn fix_positions(
+    db: &PgPool,
+    bus_id: i32,
+    from_epoch: i64,
+    to_epoch: i64,
+    allow_sim: bool,
+) -> Result<Vec<(f64, f64)>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT lat, lon FROM telemetry
+         WHERE bus_id = $1 AND fix_ok AND lat IS NOT NULL AND lon IS NOT NULL
+           AND received_at >= to_timestamp($2) AND received_at < to_timestamp($3)
+           AND (sim = 0 OR $4)
+         ORDER BY received_at, id",
+    )
+    .bind(bus_id)
+    .bind(from_epoch as f64)
+    .bind(to_epoch as f64)
+    .bind(allow_sim)
+    .fetch_all(db)
+    .await
+}
+
 /// Stores one message. A message already stored (same device, boot, seq) is skipped.
 pub async fn insert_if_new(db: &PgPool, t: &Telemetry) -> Result<(), sqlx::Error> {
     sqlx::query(

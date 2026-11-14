@@ -62,3 +62,34 @@ pub async fn delete_user(db: &PgPool, id: Uuid) -> Result<bool, sqlx::Error> {
         .await?;
     Ok(result.rows_affected() == 1)
 }
+
+/// Sets (or, with None, clears) the default payment source of a user.
+pub async fn set_default_source(db: &PgPool, user_id: Uuid, source_id: Option<Uuid>) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE users SET default_source_id = $2 WHERE id = $1")
+        .bind(user_id)
+        .bind(source_id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+/// Clears the default source, but only if it is this one (the item was deleted).
+pub async fn clear_default_source_if(db: &PgPool, user_id: Uuid, source_id: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE users SET default_source_id = NULL WHERE id = $1 AND default_source_id = $2")
+        .bind(user_id)
+        .bind(source_id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+/// Makes this item the default source, but only if the user has none yet. One statement, so two
+/// items added at the same moment cannot both become the default.
+pub async fn set_default_source_if_none(db: &PgPool, user_id: Uuid, source_id: Uuid) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE users SET default_source_id = $2 WHERE id = $1 AND default_source_id IS NULL")
+        .bind(user_id)
+        .bind(source_id)
+        .execute(db)
+        .await?;
+    Ok(())
+}

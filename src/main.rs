@@ -1,4 +1,13 @@
-use server_echopass::{app, config::Config, logging, state::AppState};
+use std::sync::Arc;
+
+use server_echopass::{
+    app,
+    config::Config,
+    logging,
+    modules::{charges, wallet::provider::FakeProvider},
+    state::AppState,
+    tasks,
+};
 use sqlx::PgPool;
 
 #[tokio::main]
@@ -16,6 +25,9 @@ async fn main() {
     // Run every .sql file in migrations/ that was not applied yet.
     sqlx::migrate!().run(&db).await.expect("migrations failed");
 
+    // The key that signs the QR tickets is created once, at the first start.
+    charges::service::ensure_ticket_key(&db).await.expect("cannot create the ticket key");
+
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", config.port))
         .await
         .expect("cannot bind the port");
@@ -24,7 +36,11 @@ async fn main() {
         tracing::warn!("TEST_MODE is on: X-User-Id is accepted instead of tokens");
     }
 
-    axum::serve(listener, app(AppState { db, config }))
+    // Expires and ends rides in the background.
+    tokio::spawn(tasks::run(db.clone(), config.test_mode));
+
+    let state = AppState { db, config, payments: Arc::new(FakeProvider) };
+    axum::serve(listener, app(state))
         .await
         .unwrap();
 }

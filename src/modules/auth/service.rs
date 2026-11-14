@@ -4,7 +4,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::{
-    models::{PatchMe, SettingsPatch, Tier, User},
+    models::{PatchMe, Tier, User, UserRole},
     repo,
 };
 use crate::error::AppError;
@@ -52,13 +52,7 @@ pub fn clean_name(name: Option<String>) -> Result<Option<String>, AppError> {
 /// PATCH /me: change the name and/or some settings, return the updated user.
 pub async fn update_me(db: &PgPool, user_id: Uuid, patch: PatchMe) -> Result<User, AppError> {
     let name = clean_name(patch.name)?;
-    let settings = patch.settings.unwrap_or(SettingsPatch {
-        auto_charge: None,
-        trip_reminders: None,
-        arrival_alerts: None,
-        disruptions: None,
-        location_sharing: None,
-    });
+    let settings = patch.settings.unwrap_or_default();
     repo::update_user(db, user_id, name.as_deref(), &settings)
         .await?
         .ok_or(AppError::NotFound)
@@ -70,4 +64,25 @@ pub async fn delete_me(db: &PgPool, user_id: Uuid) -> Result<(), AppError> {
         true => Ok(()),
         false => Err(AppError::NotFound),
     }
+}
+
+/// Makes a wallet item (card or pass) the default way to pay. The caller checked it is the user's.
+pub async fn set_default_source(db: &PgPool, user_id: Uuid, source_id: Uuid) -> Result<(), AppError> {
+    Ok(repo::set_default_source(db, user_id, Some(source_id)).await?)
+}
+
+/// A wallet item was deleted: if it was the default way to pay, there is no default any more.
+pub async fn clear_default_source_if(db: &PgPool, user_id: Uuid, source_id: Uuid) -> Result<(), AppError> {
+    Ok(repo::clear_default_source_if(db, user_id, source_id).await?)
+}
+
+/// A new wallet item becomes the default way to pay if the user has no default yet.
+pub async fn set_default_source_if_none(db: &PgPool, user_id: Uuid, source_id: Uuid) -> Result<(), AppError> {
+    Ok(repo::set_default_source_if_none(db, user_id, source_id).await?)
+}
+
+/// Only an inspector may check tickets: anyone else is 403 `FORBIDDEN`. The role is set by hand
+/// (`users.role`); nothing in the app gives it.
+pub fn require_inspector(user: &User) -> Result<(), AppError> {
+    if user.role == UserRole::Inspector { Ok(()) } else { Err(AppError::Forbidden) }
 }

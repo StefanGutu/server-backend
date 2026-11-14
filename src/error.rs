@@ -21,10 +21,17 @@ pub enum AppError {
     VehicleUnknown,
     #[error("{0}")]
     Validation(String),
+    /// A well-formed call that cannot be done because of the state of things, for example "I am on
+    /// the bus" without a recent sighting (server-api.md gives the status 422, no body and no code).
+    #[error("{0}")]
+    Unprocessable(String),
+    /// The payment failed. The text is the `reason` sent with the error: `card_declined` or
+    /// `authentication_required` (server-api.md: "PAYMENT_DECLINED (cu reason)").
     #[error("The payment was declined.")]
-    PaymentDeclined,
-    #[error("No payment card and no valid pass.")]
-    NoPaymentMethod,
+    PaymentDeclined(&'static str),
+    /// No card and no valid pass to pay with. The message says which case it is.
+    #[error("{0}")]
+    NoPaymentMethod(String),
     #[error("The ride session has expired.")]
     SessionExpired,
     #[error("This Idempotency-Key was already used with a different body.")]
@@ -47,8 +54,9 @@ impl AppError {
             Self::NotFound => (StatusCode::NOT_FOUND, "NOT_FOUND"),
             Self::VehicleUnknown => (StatusCode::NOT_FOUND, "VEHICLE_UNKNOWN"),
             Self::Validation(_) => (StatusCode::BAD_REQUEST, "VALIDATION_ERROR"),
-            Self::PaymentDeclined => (StatusCode::PAYMENT_REQUIRED, "PAYMENT_DECLINED"),
-            Self::NoPaymentMethod => (StatusCode::CONFLICT, "NO_PAYMENT_METHOD"),
+            Self::Unprocessable(_) => (StatusCode::UNPROCESSABLE_ENTITY, "VALIDATION_ERROR"),
+            Self::PaymentDeclined(_) => (StatusCode::PAYMENT_REQUIRED, "PAYMENT_DECLINED"),
+            Self::NoPaymentMethod(_) => (StatusCode::CONFLICT, "NO_PAYMENT_METHOD"),
             Self::SessionExpired => (StatusCode::CONFLICT, "SESSION_EXPIRED"),
             Self::IdempotencyConflict => (StatusCode::CONFLICT, "IDEMPOTENCY_CONFLICT"),
             Self::IdentityInUse => (StatusCode::CONFLICT, "IDENTITY_IN_USE"),
@@ -62,7 +70,10 @@ impl AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let (status, code) = self.status_and_code();
-        let body = json!({ "error": { "code": code, "message": self.to_string() } });
+        let mut body = json!({ "error": { "code": code, "message": self.to_string() } });
+        if let Self::PaymentDeclined(reason) = &self {
+            body["error"]["reason"] = json!(reason);
+        }
         (status, Json(body)).into_response()
     }
 }

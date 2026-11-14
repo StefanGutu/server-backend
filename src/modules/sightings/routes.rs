@@ -1,4 +1,4 @@
-use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
+use axum::{Json, Router, extract::State, http::StatusCode, response::Response, routing::post};
 use serde_json::{Value, json};
 
 use super::{
@@ -6,7 +6,10 @@ use super::{
     service,
 };
 use crate::{
-    error::AppError, extract::ApiJson, modules::auth::extractor::CurrentUser, state::AppState,
+    error::AppError,
+    extract::ApiJson,
+    modules::{auth::extractor::CurrentUser, rides::routes::ride_response},
+    state::AppState,
 };
 
 /// POST /sightings: "this user heard this bus".
@@ -16,7 +19,7 @@ async fn post_sighting(
     CurrentUser(user): CurrentUser,
     ApiJson(sighting): ApiJson<Sighting>, // must be last: it reads the body
 ) -> Result<(StatusCode, Json<Value>), AppError> {
-    let reply = match service::handle(&state.db, user.id, &sighting).await? {
+    let reply = match service::handle(&state.db, user.id, &sighting, state.config.test_mode).await? {
         Outcome::Accepted(status) => (StatusCode::OK, json!({ "ok": true, "ride_status": status })),
         Outcome::Rejected => (
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -26,6 +29,17 @@ async fn post_sighting(
     Ok((reply.0, Json(reply.1)))
 }
 
+/// POST /rides/manual: "I am on the bus". The answer is the ride, like `GET /rides/current`. It lives
+/// here because it starts from what the user heard, and `sightings` already calls `rides`.
+async fn post_manual_ride(
+    State(state): State<AppState>,
+    CurrentUser(user): CurrentUser,
+) -> Result<Response, AppError> {
+    Ok(ride_response(service::manual_ride(&state.db, user.id).await?))
+}
+
 pub fn router() -> Router<AppState> {
-    Router::new().route("/sightings", post(post_sighting))
+    Router::new()
+        .route("/sightings", post(post_sighting))
+        .route("/rides/manual", post(post_manual_ride))
 }

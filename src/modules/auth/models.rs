@@ -28,7 +28,7 @@ impl Default for Settings {
 
 /// What PATCH /me may change. Only the keys that are sent change, the rest stay.
 /// Unknown keys are an error, so a typo is not silently ignored.
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SettingsPatch {
     #[serde(skip_serializing_if = "Option::is_none")]
