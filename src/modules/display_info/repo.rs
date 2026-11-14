@@ -135,12 +135,15 @@ pub async fn list_frames(
     .await
 }
 
-/// The file of the newest photo of a bus.
-pub async fn latest_frame_path(db: &PgPool, bus_id: i32) -> Result<Option<String>, sqlx::Error> {
-    sqlx::query_scalar("SELECT file_path FROM frames WHERE bus_id = $1 ORDER BY received_at DESC, file_path DESC LIMIT 1")
-        .bind(bus_id)
-        .fetch_optional(db)
-        .await
+/// The newest photo of a bus (its row: where the file is and what the camera said about it).
+pub async fn latest_frame(db: &PgPool, bus_id: i32) -> Result<Option<FrameRow>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT file_path, bus_id, route_id, frame_seq, capture_ts, width, height, received_at
+         FROM frames WHERE bus_id = $1 ORDER BY received_at DESC, file_path DESC LIMIT 1",
+    )
+    .bind(bus_id)
+    .fetch_optional(db)
+    .await
 }
 
 /// The passengers of the paid rides that are going on in a bus.

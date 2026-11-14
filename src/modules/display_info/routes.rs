@@ -1,7 +1,7 @@
 use axum::{
     Json, Router,
     extract::State,
-    http::header,
+    http::{HeaderName, HeaderValue, header},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -97,8 +97,24 @@ async fn get_latest_frame(
     _access: DisplayAccess,
     ApiPath(bus_id): ApiPath<i32>,
 ) -> Result<Response, AppError> {
-    let bytes = service::latest_frame(&state.db, bus_id).await?;
-    Ok(([(header::CONTENT_TYPE, "image/jpeg")], bytes).into_response())
+    let (bytes, details) = service::latest_frame(&state.db, bus_id).await?;
+    // `no-store`: the photo changes every few seconds and must never be kept by a cache between the server and the display
+    let mut response = (
+        [
+            (header::CONTENT_TYPE, "image/jpeg"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        bytes,
+    )
+        .into_response();
+    for (name, value) in details {
+        if let Ok(value) = HeaderValue::from_str(&value) {
+            response
+                .headers_mut()
+                .insert(HeaderName::from_static(name), value);
+        }
+    }
+    Ok(response)
 }
 
 /// GET /buses/{bus_id}/capture-interval

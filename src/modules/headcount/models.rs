@@ -18,37 +18,8 @@ pub struct LatestCount {
     pub file_path: String,
 }
 
-/// A user of the app who is heard on a bus now.
-#[derive(Debug, Clone, PartialEq, Eq, FromRow)]
-pub struct Rider {
-    pub user_id: Uuid,
-    /// The passengers the user paid for: those of their confirmed ride on this bus, or 1 (themselves) when they have none.
-    pub passengers: i32,
-    /// The user has a ticket that is good now: a confirmed ride on this bus whose charge is covered by a pass, or paid and
-    /// started less than `TICKET_VALID_SECS` (60 minutes) ago.
-    pub ticket_valid: bool,
-}
-
-/// How the people in a bus compare with those who paid (the numbers `summarize` works out; step 42 adds the bus and
-/// the photo around them).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct Summary {
-    /// What the model saw in the newest counted photo. `None` when there is none, or it is too old to be true now.
-    pub people_counted: Option<i32>,
-    /// Users of the app heard on the bus now.
-    pub devices_heard: i64,
-    /// Of those, the ones with a valid ticket.
-    pub devices_paid: i64,
-    /// `devices_heard - devices_paid`: they have the app and did not pay (yet).
-    pub devices_unpaid: i64,
-    /// The passengers of the valid tickets (one ticket can cover several people).
-    pub paid_passengers: i64,
-    /// `max(0, people_counted - paid_passengers)`: an estimate of the people who ride without a ticket.
-    /// `None` when `people_counted` is `None`.
-    pub without_ticket: Option<i64>,
-}
-
-/// What `GET /buses/{bus_id}/headcount` answers: how many people are in the bus, how many paid and how many have no ticket.
+/// What `GET /buses/{bus_id}/headcount` answers: the people the camera counted in the bus and the users of the app heard on it.
+/// (What the passengers paid is not part of it: `GET /buses/{bus_id}/occupancy` has the paid passengers.)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BusHeadcount {
     pub bus_id: i32,
@@ -57,6 +28,8 @@ pub struct BusHeadcount {
     #[serde(serialize_with = "crate::extract::utc_seconds_opt")]
     pub counted_at: Option<DateTime<Utc>>,
     pub frame_id: Option<Uuid>,
-    #[serde(flatten)]
-    pub summary: Summary,
+    /// What the model saw in the newest counted photo. `None` when there is none, or it is too old to be true now.
+    pub people_counted: Option<i32>,
+    /// Users of the app heard on the bus now.
+    pub devices_heard: i64,
 }

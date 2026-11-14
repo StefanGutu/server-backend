@@ -141,16 +141,45 @@ pub async fn list_frames(
     Ok(rows.into_iter().filter_map(frame_info).collect())
 }
 
-/// The bytes of the newest photo of the bus (a JPEG). 404 when the bus has no photo, or its file is gone.
-pub async fn latest_frame(db: &PgPool, bus_id: i32) -> Result<Vec<u8>, AppError> {
+/// The details of a photo as headers of the answer that carries it (the names the camera uses when it sends the photo, so the
+/// display can show when it was taken and how big it is): `X-Bus-Id`, `X-Frame-Id` (the id of `GET /buses/{bus_id}/frames`),
+/// `X-Route-Id`, `X-Frame-Seq`, `X-Capture-Ts` (the clock of the camera, 0 when it had none), `X-Frame-Size` (`800x600`) and
+/// `X-Received-At` (when the server got it, `2026-11-14T14:00:05Z`). A detail the server does not have is left out. Pure.
+pub fn frame_headers(row: &FrameRow) -> Vec<(&'static str, String)> {
+    let mut headers = vec![("x-bus-id", row.bus_id.to_string())];
+    if let Some(id) = frame_id_of(&row.file_path) {
+        headers.push(("x-frame-id", id.to_string()));
+    }
+    if let Some(route_id) = row.route_id {
+        headers.push(("x-route-id", route_id.to_string()));
+    }
+    headers.push(("x-frame-seq", row.frame_seq.to_string()));
+    headers.push(("x-capture-ts", row.capture_ts.to_string()));
+    if let (Some(width), Some(height)) = (row.width, row.height) {
+        headers.push(("x-frame-size", format!("{width}x{height}")));
+    }
+    headers.push((
+        "x-received-at",
+        row.received_at
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    ));
+    headers
+}
+
+/// The newest photo of the bus: the JPEG and its details (`frame_headers`). 404 when the bus has no photo, or its file is gone.
+pub async fn latest_frame(
+    db: &PgPool,
+    bus_id: i32,
+) -> Result<(Vec<u8>, Vec<(&'static str, String)>), AppError> {
     require_bus(db, bus_id).await?;
-    let path = repo::latest_frame_path(db, bus_id)
+    let row = repo::latest_frame(db, bus_id)
         .await?
         .ok_or(AppError::NotFound)?;
-    tokio::fs::read(&path).await.map_err(|e| {
-        tracing::warn!(path, "the file of the newest photo cannot be read: {e}");
+    let bytes = tokio::fs::read(&row.file_path).await.map_err(|e| {
+        tracing::warn!(path = %row.file_path, "the file of the newest photo cannot be read: {e}");
         AppError::NotFound
-    })
+    })?;
+    Ok((bytes, frame_headers(&row)))
 }
 
 /// How many people are in the bus, how many paid and how many have no ticket. 404 `VEHICLE_UNKNOWN` for a bus that does

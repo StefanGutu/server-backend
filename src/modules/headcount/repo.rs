@@ -1,7 +1,6 @@
-use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
-use super::models::{LatestCount, Rider, Uncounted};
+use super::models::{LatestCount, Uncounted};
 
 /// For each bus, its newest photo, only if it has no count yet. An older photo that was never counted is skipped on
 /// purpose: only the newest photo of a bus says how many people are in it now.
@@ -40,33 +39,13 @@ pub async fn latest_count(db: &PgPool, bus_id: i32) -> Result<Option<LatestCount
     .await
 }
 
-/// The users heard on this bus from `since_slot` on (one row for each user), with what they paid and whether the
-/// ticket is good at `now`. A user has at most one open ride (a unique index), so one row each. A charge that was
-/// cancelled is no ticket. `ticket_secs` is how long a ticket paid by card is good (a pass lasts as long as the ride).
-pub async fn riders(
-    db: &PgPool,
-    bus_id: i32,
-    since_slot: i64,
-    now: DateTime<Utc>,
-    ticket_secs: i64,
-) -> Result<Vec<Rider>, sqlx::Error> {
-    sqlx::query_as(
-        "SELECT h.user_id,
-                COALESCE(r.passengers, 1) AS passengers,
-                COALESCE(c.status = 'covered_by_pass'
-                         OR (c.status = 'in_progress' AND c.started_at > $3 - make_interval(secs => $4)), false) AS ticket_valid
-         FROM (SELECT DISTINCT user_id FROM sightings WHERE bus_id = $1 AND slot >= $2) h
-         LEFT JOIN ride_sessions r ON r.user_id = h.user_id AND r.bus_id = $1 AND r.status = 'confirmed'
-         LEFT JOIN LATERAL (
-             SELECT status, started_at FROM charges
-             WHERE session_id = r.id AND status <> 'cancelled' ORDER BY id DESC LIMIT 1
-         ) c ON true
-         ORDER BY h.user_id",
+/// How many users of the app were heard on this bus from `since_slot` on (each user once).
+pub async fn devices_heard(db: &PgPool, bus_id: i32, since_slot: i64) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT count(DISTINCT user_id) FROM sightings WHERE bus_id = $1 AND slot >= $2",
     )
     .bind(bus_id)
     .bind(since_slot)
-    .bind(now)
-    .bind(ticket_secs as f64)
-    .fetch_all(db)
+    .fetch_one(db)
     .await
 }

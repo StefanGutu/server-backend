@@ -21,15 +21,15 @@ use crate::{
 pub const MAX_FRAME_BYTES: usize = 2 * 1024 * 1024;
 
 /// What the camera is told after each photo: wait 3 seconds. Must be 1000 to 60000 (server.md).
-pub const NEXT_CAPTURE_MS: u32 = 5000;
+pub const NEXT_CAPTURE_MS: u32 = 10000;
 
 /// The folder the photos are saved in, next to the code (`photos/` is not in git). One folder per bus.
 pub const PHOTOS_DIR: &str = "photos";
 
-/// How many photos are kept for each bus: the newest 1000. When a bus has more, the oldest are deleted
-/// (the file and the row), so a camera that sends a photo every 3 seconds cannot fill the disk.
-/// 1000 photos is about 50 minutes of a camera that shoots every 3 seconds.
-pub const MAX_PHOTOS_PER_BUS: i64 = 1000;
+/// How many photos are kept for each bus: the newest 100, a buffer. Nothing is deleted while a bus has 100 or fewer; each
+/// photo after that makes the oldest one go (the file and the row, together), so the newest photo is always there and a camera
+/// cannot fill the disk. At one photo every 20 seconds (`NEXT_CAPTURE_MS`) 100 photos are about 33 minutes.
+pub const MAX_PHOTOS_PER_BUS: i64 = 100;
 
 fn invalid(message: String) -> AppError {
     AppError::Validation(message)

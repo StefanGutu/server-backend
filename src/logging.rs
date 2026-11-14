@@ -1,5 +1,5 @@
 //! Logs go to the terminal and to log/server-info.log.
-//! The file is emptied at every start, then every line is appended while the server runs.
+//! The file is emptied at every start, then every line is appended while the server runs. `LOG_DIR` changes the folder.
 
 use std::{fs::File, sync::Mutex};
 
@@ -8,12 +8,23 @@ use tracing_subscriber::{
 };
 
 const LOG_DIR: &str = "log";
-const LOG_FILE: &str = "log/server-info.log";
+
+/// Where the log file is: `log/server-info.log`, or the folder of `LOG_DIR` when that is set. A second server started
+/// only to try something (a test server) sets it, so that it does not empty the log of the server that is really running.
+fn log_file() -> (String, String) {
+    let dir = std::env::var("LOG_DIR")
+        .ok()
+        .filter(|d| !d.trim().is_empty())
+        .unwrap_or_else(|| LOG_DIR.to_string());
+    let file = format!("{dir}/server-info.log");
+    (dir, file)
+}
 
 pub fn init() {
-    std::fs::create_dir_all(LOG_DIR).expect("cannot create the log folder");
+    let (dir, path) = log_file();
+    std::fs::create_dir_all(&dir).expect("cannot create the log folder");
     // File::create empties an existing file.
-    let file = File::create(LOG_FILE).expect("cannot create the log file");
+    let file = File::create(&path).expect("cannot create the log file");
 
     // Log level comes from RUST_LOG, default is "info".
     let filter =

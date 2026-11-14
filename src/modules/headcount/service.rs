@@ -7,14 +7,14 @@ use sqlx::PgPool;
 
 use super::{
     client::{CountError, HeadcountClient},
-    models::{BusHeadcount, LatestCount, Rider, Summary, Uncounted},
+    models::{BusHeadcount, LatestCount, Uncounted},
     repo,
 };
 use crate::{
     error::AppError,
     modules::{
-        charges::ticket::TICKET_VALID_SECS, display_info::service::frame_id_of,
-        rides::service::SILENCE_SLOTS, sightings::service::SLOT_SECS,
+        display_info::service::frame_id_of, rides::service::SILENCE_SLOTS,
+        sightings::service::SLOT_SECS,
     },
 };
 
@@ -107,40 +107,9 @@ pub fn heard_since_slot(now_secs: i64) -> i64 {
     now_secs / SLOT_SECS - (SILENCE_SLOTS - 1)
 }
 
-/// The users of the app heard on this bus now, with what they paid and whether their ticket is good.
-pub async fn riders(db: &PgPool, bus_id: i32, now: DateTime<Utc>) -> Result<Vec<Rider>, AppError> {
-    Ok(repo::riders(
-        db,
-        bus_id,
-        heard_since_slot(now.timestamp()),
-        now,
-        TICKET_VALID_SECS,
-    )
-    .await?)
-}
-
-/// How the people the model counted compare with the users of the app who paid. Pure.
-///
-/// - `devices_heard` are all the riders, `devices_paid` those with a valid ticket, `devices_unpaid` the rest.
-/// - `paid_passengers` is the sum of `passengers` of the valid tickets only: a ticket that is over covers nobody.
-/// - `without_ticket` is `people_counted - paid_passengers`, never below 0, and `None` when nothing was counted.
-///   It is an estimate: the model can miss a person or count one twice, and if the camera sees the driver it is 1 too high.
-pub fn summarize(people_counted: Option<i32>, riders: &[Rider]) -> Summary {
-    let devices_heard = riders.len() as i64;
-    let devices_paid = riders.iter().filter(|r| r.ticket_valid).count() as i64;
-    let paid_passengers: i64 = riders
-        .iter()
-        .filter(|r| r.ticket_valid)
-        .map(|r| i64::from(r.passengers))
-        .sum();
-    Summary {
-        people_counted,
-        devices_heard,
-        devices_paid,
-        devices_unpaid: devices_heard - devices_paid,
-        paid_passengers,
-        without_ticket: people_counted.map(|counted| (i64::from(counted) - paid_passengers).max(0)),
-    }
+/// How many users of the app are heard on this bus now (each user once).
+pub async fn devices_heard(db: &PgPool, bus_id: i32, now: DateTime<Utc>) -> Result<i64, AppError> {
+    Ok(repo::devices_heard(db, bus_id, heard_since_slot(now.timestamp())).await?)
 }
 
 /// A count older than this (60 seconds) is not shown as the people in the bus now: a number from a camera that
@@ -149,11 +118,12 @@ pub const COUNT_FRESH_SECS: i64 = 60;
 
 /// The answer of `GET /buses/{bus_id}/headcount` from what the database has. `people_counted` is the count of the newest
 /// counted photo only while it is at most `COUNT_FRESH_SECS` old; `counted_at` and `frame_id` say which photo it was
-/// either way. Pure.
+/// either way. The count is what the model saw: it can miss a person or count one twice, and a camera that sees the
+/// driver counts one more. Pure.
 pub fn build_headcount(
     bus_id: i32,
     latest: Option<&LatestCount>,
-    riders: &[Rider],
+    devices_heard: i64,
     now: DateTime<Utc>,
 ) -> BusHeadcount {
     let fresh = latest.filter(|l| (now - l.counted_at).num_seconds() <= COUNT_FRESH_SECS);
@@ -161,17 +131,18 @@ pub fn build_headcount(
         bus_id,
         counted_at: latest.map(|l| l.counted_at),
         frame_id: latest.and_then(|l| frame_id_of(&l.file_path)),
-        summary: summarize(fresh.map(|l| l.people_count), riders),
+        people_counted: fresh.map(|l| l.people_count),
+        devices_heard,
     }
 }
 
-/// How many people are in the bus, how many paid, how many have no ticket (the caller checks that the bus exists).
+/// The people the camera counted in the bus and the users of the app heard on it (the caller checks that the bus exists).
 pub async fn bus_headcount(
     db: &PgPool,
     bus_id: i32,
     now: DateTime<Utc>,
 ) -> Result<BusHeadcount, AppError> {
     let latest = latest_count(db, bus_id).await?;
-    let riders = riders(db, bus_id, now).await?;
-    Ok(build_headcount(bus_id, latest.as_ref(), &riders, now))
+    let heard = devices_heard(db, bus_id, now).await?;
+    Ok(build_headcount(bus_id, latest.as_ref(), heard, now))
 }
