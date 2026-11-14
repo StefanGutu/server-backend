@@ -6,7 +6,7 @@ use axum::{
 };
 
 use super::{
-    extractor::CurrentUser,
+    extractor::{CurrentUser, MaybeBearerUser},
     models::{AnonymousInput, LinkInput, LoginReply, Me, PatchMe, RefreshInput, SigninInput, TokenReply},
     service,
 };
@@ -49,17 +49,20 @@ async fn post_link(
     Ok(Json(service::link(&state.db, &state.config.jwt_secret, &state.id_tokens, &user, &input).await?))
 }
 
-/// POST /auth/signin: logs in to the account that owns the phone. No login needed.
+/// POST /auth/signin: logs in with a Google or Apple identity. No login needed. If the call carries the
+/// `Bearer` token of an anonymous user, that user is the one left behind: it is deleted (see the service).
 async fn post_signin(
     State(state): State<AppState>,
-    ApiJson(input): ApiJson<SigninInput>,
+    MaybeBearerUser(caller): MaybeBearerUser,
+    ApiJson(input): ApiJson<SigninInput>, // must be last: it reads the body
 ) -> Result<Json<LoginReply>, AppError> {
-    Ok(Json(service::signin(&state.db, &state.config.jwt_secret, &state.id_tokens, &input).await?))
+    let reply = service::signin(&state.db, &state.config.jwt_secret, &state.id_tokens, &input, caller.as_ref()).await?;
+    Ok(Json(reply))
 }
 
 /// POST /auth/logout: the refresh tokens of the user are revoked. 204, no body.
 async fn post_logout(State(state): State<AppState>, CurrentUser(user): CurrentUser) -> Result<StatusCode, AppError> {
-    service::logout(&state.db, user.id).await?;
+    service::logout(&state.db, &user).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

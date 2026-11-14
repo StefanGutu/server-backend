@@ -185,12 +185,18 @@ pub fn require_inspector(user: &User) -> Result<(), AppError> {
 }
 
 /// POST /auth/logout: the refresh tokens of the user stop working, so the app cannot get new access
-/// tokens. The call has no body and the access token names no device, so it ends every login of the
+/// tokens. An **anonymous** user is deleted instead (see `abandon_anonymous_user`): without a login there is
+/// no way back to them. The call has no body and the access token names no device, so it ends every login of the
 /// user (all phones). Calling it again is fine. The access token in use keeps working until its 15
 /// minutes pass (doc/reminders.md R36).
-pub async fn logout(db: &PgPool, user_id: Uuid) -> Result<(), AppError> {
-    let revoked = repo::revoke_user_tokens(db, user_id).await?;
-    tracing::info!(%user_id, revoked, "logout: the refresh tokens of the user are revoked");
+pub async fn logout(db: &PgPool, user: &User) -> Result<(), AppError> {
+    if user.tier == Tier::Anonymous {
+        // Their login was their only way in: nobody can reach this user again. Delete them.
+        abandon_anonymous_user(db, user.id, "logged out").await;
+        return Ok(());
+    }
+    let revoked = repo::revoke_user_tokens(db, user.id).await?;
+    tracing::info!(user_id = %user.id, revoked, "logout: the refresh tokens of the user are revoked");
     Ok(())
 }
 
@@ -342,13 +348,53 @@ async fn login_to_owner(
     Ok(Some(issue_login(db, jwt_secret, user.id, user.tier, device_id).await?))
 }
 
+/// The anonymous user who is left behind by a sign-in, if there is one: the caller, when they proved who
+/// they are (a good `Bearer` token), are `anonymous`, and are not the user they signed in as. An account is
+/// never abandoned. Pure.
+pub fn abandoned_anonymous(caller: Option<&User>, signed_in_as: Uuid) -> Option<Uuid> {
+    caller.filter(|user| user.tier == Tier::Anonymous && user.id != signed_in_as).map(|user| user.id)
+}
+
+/// An anonymous user nobody can reach any more: the user and everything they had (cards, passes, rides,
+/// sightings, charges, logins) are deleted, and a warning is written in the log. A failure is logged and
+/// does not fail the call that led here: the person is already signed in or out.
+async fn abandon_anonymous_user(db: &PgPool, user_id: Uuid, why: &str) {
+    match repo::delete_user(db, user_id).await {
+        Ok(true) => tracing::warn!(%user_id, why, "anonymous user abandoned: the user and everything they had were deleted"),
+        Ok(false) => {}
+        Err(e) => tracing::error!(%user_id, why, "cannot delete an abandoned anonymous user: {e}"),
+    }
+}
+
 /// POST /auth/signin: logs in with a Google or Apple identity, on this device. No login needed.
 /// - The identity already has an account: the app gets that account's tokens. **Nothing is moved**:
-///   what the anonymous user of this phone had (cards, passes, rides) stays with that anonymous
-///   user, abandoned. Data is only carried when an account is made with `link`.
+///   what the anonymous user of this phone had (cards, passes, rides) is abandoned and **deleted**
+///   (with a warning in the log), but only when the call carries that anonymous user's own `Bearer`
+///   token (`caller`): a `deviceId` is not a secret and must not be enough to delete someone's data.
+///   Data is only carried when an account is made with `link`.
 /// - The identity has no account: **one is made** (tier `account`, empty), so a person who never used
 ///   the app can sign in straight away. Two calls at the same moment make one account.
 pub async fn signin(
+    db: &PgPool,
+    jwt_secret: &str,
+    verifier: &IdTokenVerifier,
+    input: &SigninInput,
+    caller: Option<&User>,
+) -> Result<LoginReply, AppError> {
+    let reply = signin_identity(db, jwt_secret, verifier, input).await?;
+    match abandoned_anonymous(caller, reply.user_id) {
+        Some(anonymous_id) => abandon_anonymous_user(db, anonymous_id, "signed in to an account").await,
+        None if caller.is_none() => tracing::info!(
+            user_id = %reply.user_id,
+            "signed in without a login: an anonymous user of this phone, if there is one, is not deleted (nothing proves it is theirs)"
+        ),
+        None => {}
+    }
+    Ok(reply)
+}
+
+/// The sign-in itself: the tokens of the account that owns the identity, or of a new one.
+async fn signin_identity(
     db: &PgPool,
     jwt_secret: &str,
     verifier: &IdTokenVerifier,
