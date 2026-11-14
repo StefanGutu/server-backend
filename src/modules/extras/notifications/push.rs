@@ -51,7 +51,7 @@ impl Push {
             ),
             PushType::ChargeCancelled => (
                 "Charge cancelled",
-                "A charge was cancelled. Nothing was taken from you.",
+                "A charge was cancelled. The money is returned to your card.",
             ),
         }
     }

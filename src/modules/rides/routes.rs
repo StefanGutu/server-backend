@@ -14,7 +14,7 @@ use super::{
 };
 use crate::{
     error::AppError,
-    extract::{ApiPath, header_str, parse_json_body},
+    extract::{ApiPath, header_str, parse_json_body, run_to_the_end},
     modules::{auth::extractor::CurrentUser, idempotency},
     state::AppState,
 };
@@ -58,12 +58,16 @@ async fn post_confirm(
     let input: ConfirmInput = parse_json_body(&body)?;
     let endpoint = format!("POST /rides/{session_id}/confirm");
     let request = idempotency::service::request_from_headers(&headers, &endpoint, &body)?;
-    let pay = PayContext {
-        provider: state.payments.as_ref(),
-        push: &state.push,
-        test_mode: state.config.test_mode,
-    };
-    let reply = service::confirm(&state.db, &pay, &user, session_id, &input, &request).await?;
+    // In its own task: if the phone gives up, the payment still ends cleanly.
+    let reply = run_to_the_end(async move {
+        let pay = PayContext {
+            provider: state.payments.as_ref(),
+            push: &state.push,
+            test_mode: state.config.test_mode,
+        };
+        service::confirm(&state.db, &pay, &user, session_id, &input, &request).await
+    })
+    .await?;
     Ok(ride_response(reply))
 }
 
@@ -73,9 +77,9 @@ async fn post_decline(
     CurrentUser(user): CurrentUser,
     ApiPath(session_id): ApiPath<Uuid>,
 ) -> Result<Response, AppError> {
-    Ok(ride_response(
-        service::decline(&state.db, &user, session_id).await?,
-    ))
+    let reply =
+        run_to_the_end(async move { service::decline(&state.db, &user, session_id).await }).await?;
+    Ok(ride_response(reply))
 }
 
 pub fn router() -> Router<AppState> {

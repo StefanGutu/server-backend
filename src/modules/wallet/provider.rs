@@ -38,6 +38,15 @@ pub trait PaymentProvider: Send + Sync {
         payment_method_id: &'a str,
         amount_bani: i32,
     ) -> BoxFuture<'a, Result<ChargeResult, AppError>>;
+
+    /// Gives `amount_bani` back to the card that was charged (a charge that must be undone, for example
+    /// when the ride changed while the card was being charged). A real provider needs the id of its own
+    /// payment too: see doc/reminders.md R48.
+    fn refund<'a>(
+        &'a self,
+        payment_method_id: &'a str,
+        amount_bani: i32,
+    ) -> BoxFuture<'a, Result<(), AppError>>;
 }
 
 /// A provider that always says yes and keeps nothing. Used until a real one is connected.
@@ -65,6 +74,21 @@ impl PaymentProvider for FakeProvider {
                 },
                 _ => ChargeResult::Paid,
             })
+        })
+    }
+
+    fn refund<'a>(
+        &'a self,
+        payment_method_id: &'a str,
+        amount_bani: i32,
+    ) -> BoxFuture<'a, Result<(), AppError>> {
+        Box::pin(async move {
+            tracing::info!(
+                payment_method_id,
+                amount_bani,
+                "refund (fake, nothing is sent)"
+            );
+            Ok(())
         })
     }
 

@@ -4,7 +4,7 @@
 use axum::http::HeaderMap;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use sqlx::{PgPool, Postgres, pool::PoolConnection};
+use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use super::{
@@ -72,12 +72,12 @@ pub async fn finish(
 
 /// One operation at a time for a thing that is paid for (a ride, a pass): the second request waits
 /// until the first has its answer, then sees what the first did. Without it two requests at the same
-/// moment could both pay. `name` is for example `ride:<id>`. Give the connection back to `unlock`.
-pub async fn lock(db: &PgPool, name: &str) -> Result<PoolConnection<Postgres>, AppError> {
+/// moment could both pay. `name` is for example `ride:<id>`. Give what it returns to `unlock`.
+pub async fn lock(db: &PgPool, name: &str) -> Result<Transaction<'static, Postgres>, AppError> {
     Ok(repo::lock(db, name).await?)
 }
 
 /// Releases a lock of `lock`.
-pub async fn unlock(lock: PoolConnection<Postgres>, name: &str) {
+pub async fn unlock(lock: Transaction<'static, Postgres>, name: &str) {
     repo::unlock(lock, name).await;
 }

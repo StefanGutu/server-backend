@@ -335,6 +335,14 @@ pub fn bus_kept_moving(moved_m: f64) -> bool {
     moved_m >= MIN_MOVEMENT_M
 }
 
+/// The user has been silent for as long as a ticket is valid (60 minutes). The ride ends even if the bus
+/// sent no positions, otherwise a ride whose bus has no GPS would stay `confirmed` for ever and the user
+/// could never start another one. `heard_until` is the end of the last slot the user was heard in, `now`
+/// is unix seconds. Pure.
+pub fn silent_past_ticket(heard_until: i64, now: i64) -> bool {
+    now - heard_until >= crate::modules::charges::ticket::TICKET_VALID_SECS
+}
+
 /// confirmed -> ended. False when the ride was no longer `confirmed`.
 pub async fn end_ride(db: &PgPool, session_id: Uuid) -> Result<bool, AppError> {
     Ok(repo::change_status(db, session_id, RideStatus::Confirmed, RideStatus::Ended).await?)
@@ -623,8 +631,17 @@ async fn confirm_locked(
     .await?;
 
     if !repo::confirm_session(db, session.id, bus_id, input.passengers).await? {
-        // Another request changed the ride first (for example it expired): do not keep this charge.
+        // Another request changed the ride first (for example it expired): do not keep this charge, and give
+        // the money back (a failed refund is logged loudly: nobody else will notice).
         charges::service::cancel_charge(db, charge.id).await?;
+        if let Some(card) = &card
+            && let Err(e) = pay
+                .provider
+                .refund(&card.provider_method_id, amount_bani)
+                .await
+        {
+            tracing::error!(session_id = %session.id, charge_id = %charge.id, amount_bani, "REFUND FAILED, the user was charged for nothing: {e}");
+        }
         tracing::warn!(session_id = %session.id, charge_id = %charge.id, "ride changed while paying: charge cancelled");
         notifications::service::send_push(
             db,

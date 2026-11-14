@@ -17,7 +17,7 @@ use super::{
 };
 use crate::{
     error::AppError,
-    extract::{ApiJson, ApiPath, parse_json_body},
+    extract::{ApiJson, ApiPath, parse_json_body, run_to_the_end},
     modules::{auth::extractor::CurrentUser, idempotency},
     state::AppState,
 };
@@ -98,11 +98,13 @@ async fn post_renew(
     let input: RenewInput = parse_json_body(&body)?;
     let endpoint = format!("POST /wallet/passes/{pass_id}/renew");
     let request = idempotency::service::request_from_headers(&headers, &endpoint, &body)?;
-    let provider = state.payments.as_ref();
-    Ok(
-        Json(service::renew_pass(&state.db, provider, &user, pass_id, &input, &request).await?)
-            .into_response(),
-    )
+    // In its own task: if the phone gives up, the payment still ends cleanly.
+    let answer = run_to_the_end(async move {
+        let provider = state.payments.as_ref();
+        service::renew_pass(&state.db, provider, &user, pass_id, &input, &request).await
+    })
+    .await?;
+    Ok(Json(answer).into_response())
 }
 
 pub fn router() -> Router<AppState> {

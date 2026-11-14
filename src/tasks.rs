@@ -71,16 +71,19 @@ pub async fn run_once(db: &PgPool, allow_sim: bool) -> Result<(), AppError> {
         }
         // The user is no longer heard. Did the bus keep going, or did the signal just drop?
         let heard_until = (last_slot + 1) * sightings::service::SLOT_SECS;
-        let moved_m =
-            telemetry::service::bus_movement_m(db, ride.bus_id, heard_until, now, allow_sim)
-                .await?;
-        if rides::service::bus_kept_moving(moved_m) && rides::service::end_ride(db, ride.id).await?
-        {
+        // Silent for a whole ticket (60 minutes): over, even if the bus sent no positions.
+        let silent_too_long = rides::service::silent_past_ticket(heard_until, now);
+        let kept_moving = !silent_too_long
+            && rides::service::bus_kept_moving(
+                telemetry::service::bus_movement_m(db, ride.bus_id, heard_until, now, allow_sim)
+                    .await?,
+            );
+        if (silent_too_long || kept_moving) && rides::service::end_ride(db, ride.id).await? {
             // The ride is over, so its charge is too: it gets an end and is completed.
             let completed = charges::service::complete_ride_charge(db, ride.id).await?;
             tracing::info!(
                 session_id = %ride.id, bus_id = ride.bus_id, charges_completed = completed,
-                "ride ended: user no longer heard, bus kept moving"
+                silent_too_long, "ride ended: user no longer heard, and the bus kept moving or the ticket time is over"
             );
             // One failed trip must not stop the other rides: the error is logged.
             if let Err(e) = write_trip(db, &ride, allow_sim).await {

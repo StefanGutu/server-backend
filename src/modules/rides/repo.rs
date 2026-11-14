@@ -68,15 +68,18 @@ pub async fn offer_ride(
     Ok(result.rows_affected() == 1)
 }
 
-/// `awaiting_confirmation` rides whose time to answer has run out become `rejected`.
-/// Returns how many. Raises `version` and `updated_at` so the app's ETag changes.
+/// `awaiting_confirmation` and `payment_failed` rides whose time has run out become `rejected`. (A failed
+/// payment keeps the `expires_at` it got: if it were never rejected the ride would stay open for ever, and
+/// the user could neither confirm nor start another.) Returns how many. Raises `version` and `updated_at`
+/// so the app's ETag changes.
 pub async fn reject_expired(db: &PgPool) -> Result<u64, sqlx::Error> {
     let result = sqlx::query(
         "UPDATE ride_sessions SET status = $1, version = version + 1, updated_at = now()
-         WHERE status = $2 AND expires_at < now()",
+         WHERE status IN ($2, $3) AND expires_at < now()",
     )
     .bind(RideStatus::Rejected)
     .bind(RideStatus::AwaitingConfirmation)
+    .bind(RideStatus::PaymentFailed)
     .execute(db)
     .await?;
     Ok(result.rows_affected())

@@ -11,6 +11,23 @@ use uuid::Uuid;
 
 use crate::error::AppError;
 
+/// Runs work that must not be cut in half (a payment: the card, the charge and the ride are three
+/// steps) in its own task. If the phone gives up and the request is dropped, the task still runs to the
+/// end, so a card is never charged without the ride being updated. A task that panics is a 500.
+pub async fn run_to_the_end<T, F>(work: F) -> Result<T, AppError>
+where
+    T: Send + 'static,
+    F: std::future::Future<Output = Result<T, AppError>> + Send + 'static,
+{
+    match tokio::spawn(work).await {
+        Ok(result) => result,
+        Err(e) => {
+            tracing::error!("a request task did not finish: {e}");
+            Err(AppError::Server)
+        }
+    }
+}
+
 /// Same as axum's `Path`, but a bad value (`/routes/abc`) gives our JSON error
 /// (400 `VALIDATION_ERROR`) instead of plain text.
 pub struct ApiPath<T>(pub T);

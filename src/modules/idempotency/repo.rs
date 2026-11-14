@@ -1,5 +1,5 @@
 use serde_json::Value;
-use sqlx::{PgPool, Postgres, pool::PoolConnection, types::Json};
+use sqlx::{PgPool, Postgres, Transaction, types::Json};
 use uuid::Uuid;
 
 use super::models::IdempotentRequest;
@@ -41,27 +41,23 @@ pub async fn insert(
     Ok(())
 }
 
-/// Takes a lock with this name and waits if another request holds it. The lock belongs to the
-/// connection that is returned, so keep it until `unlock`. It is also released if the connection is
-/// closed (for example when the server stops).
-pub async fn lock(db: &PgPool, name: &str) -> Result<PoolConnection<Postgres>, sqlx::Error> {
-    let mut conn = db.acquire().await?;
-    sqlx::query("SELECT pg_advisory_lock(hashtextextended($1, 0))")
+/// Takes a lock with this name and waits if another request holds it. The lock lives as long as the
+/// returned transaction (`pg_advisory_xact_lock`): it is released when the transaction ends, and also
+/// when the transaction is dropped (the database rolls it back and the connection goes back to the pool
+/// clean), so a request that is abandoned half way can never leave a lock behind.
+pub async fn lock(db: &PgPool, name: &str) -> Result<Transaction<'static, Postgres>, sqlx::Error> {
+    let mut tx = db.begin().await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind(name)
-        .execute(&mut *conn)
+        .execute(&mut *tx)
         .await?;
-    Ok(conn)
+    Ok(tx)
 }
 
-/// Releases the lock of `lock`. If that fails, the connection is closed instead of going back to the
-/// pool, so a lock can never stay on a pooled connection.
-pub async fn unlock(mut conn: PoolConnection<Postgres>, name: &str) {
-    let unlocked = sqlx::query("SELECT pg_advisory_unlock(hashtextextended($1, 0))")
-        .bind(name)
-        .execute(&mut *conn)
-        .await;
-    if let Err(e) = unlocked {
+/// Releases the lock of `lock` by ending its transaction. If that fails the transaction is dropped,
+/// which rolls it back: the lock is gone either way.
+pub async fn unlock(lock: Transaction<'static, Postgres>, name: &str) {
+    if let Err(e) = lock.commit().await {
         tracing::error!("cannot release the lock {name}: {e}");
-        drop(conn.detach());
     }
 }
