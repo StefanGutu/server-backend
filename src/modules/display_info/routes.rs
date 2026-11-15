@@ -91,13 +91,13 @@ async fn get_frames(
     Ok(Json(service::list_frames(&state.db, bus_id, &query).await?))
 }
 
-/// GET /buses/{bus_id}/frames/latest: the JPEG itself.
+/// GET /buses/{bus_id}/frames/latest: the JPEG the model made from the newest photo (the camera photo if the model fails).
 async fn get_latest_frame(
     State(state): State<AppState>,
     _access: DisplayAccess,
     ApiPath(bus_id): ApiPath<i32>,
 ) -> Result<Response, AppError> {
-    let (bytes, details) = service::latest_frame(&state.db, bus_id).await?;
+    let (bytes, details) = service::latest_frame(&state.db, state.config.headcount_url.as_deref(), bus_id).await?;
     // `no-store`: the photo changes every few seconds and must never be kept by a cache between the server and the display
     let mut response = (
         [

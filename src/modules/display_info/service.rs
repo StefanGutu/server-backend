@@ -14,7 +14,7 @@ use super::{
 use crate::{
     error::AppError,
     modules::{
-        frames::service::{NEXT_CAPTURE_MS, frame_path},
+        frames::service::{NEXT_CAPTURE_MS, frame_path, model_image_path, save_model_image},
         headcount,
     },
 };
@@ -166,20 +166,46 @@ pub fn frame_headers(row: &FrameRow) -> Vec<(&'static str, String)> {
     headers
 }
 
-/// The newest photo of the bus: the JPEG and its details (`frame_headers`). 404 when the bus has no photo, or its file is gone.
+/// The newest photo of the bus as the display shows it: the picture the model makes from it, and the details of the photo
+/// (`frame_headers`). The picture is made once per photo: it is saved in `photos/model_image/<bus_id>/` and the next call
+/// reads it from there. When there is none yet, the stored photo is sent to the model (`HEADCOUNT_URL`, `POST /annotate`).
+/// If the model is not set, does not answer or answers badly, the display gets the camera photo (logged), never nothing.
+/// 404 when the bus has no photo, or its file is gone.
 pub async fn latest_frame(
     db: &PgPool,
+    model_url: Option<&str>,
     bus_id: i32,
 ) -> Result<(Vec<u8>, Vec<(&'static str, String)>), AppError> {
     require_bus(db, bus_id).await?;
     let row = repo::latest_frame(db, bus_id)
         .await?
         .ok_or(AppError::NotFound)?;
-    let bytes = tokio::fs::read(&row.file_path).await.map_err(|e| {
+    let details = frame_headers(&row);
+    if let Some(path) = model_image_path(&row.file_path)
+        && let Ok(bytes) = tokio::fs::read(&path).await
+    {
+        return Ok((bytes, details));
+    }
+    let camera = tokio::fs::read(&row.file_path).await.map_err(|e| {
         tracing::warn!(path = %row.file_path, "the file of the newest photo cannot be read: {e}");
         AppError::NotFound
     })?;
-    Ok((bytes, frame_headers(&row)))
+    let Some(url) = model_url else {
+        return Ok((camera, details));
+    };
+    match headcount::client::HeadcountClient::new(url)
+        .annotate(camera.clone())
+        .await
+    {
+        Ok(image) => {
+            save_model_image(&row.file_path, &image).await;
+            Ok((image, details))
+        }
+        Err(e) => {
+            tracing::warn!(bus_id, "no picture from the model, the camera photo is sent: {e}");
+            Ok((camera, details))
+        }
+    }
 }
 
 /// How many people are in the bus, how many paid and how many have no ticket. 404 `VEHICLE_UNKNOWN` for a bus that does

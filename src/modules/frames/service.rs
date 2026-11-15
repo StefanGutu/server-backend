@@ -21,7 +21,7 @@ use crate::{
 pub const MAX_FRAME_BYTES: usize = 2 * 1024 * 1024;
 
 /// What the camera is told after each photo: wait 3 seconds. Must be 1000 to 60000 (server.md).
-pub const NEXT_CAPTURE_MS: u32 = 10000;
+pub const NEXT_CAPTURE_MS: u32 = 3000;
 
 /// The folder the photos are saved in, next to the code (`photos/` is not in git). One folder per bus.
 pub const PHOTOS_DIR: &str = "photos";
@@ -110,6 +110,37 @@ pub fn frame_path(bus_id: i32, id: Uuid) -> String {
     format!("{PHOTOS_DIR}/{bus_id}/{id}.jpg")
 }
 
+/// Where the picture the model made from the photo `file_path` is saved: `photos/model_image/<bus_id>/<same name>.jpg`.
+/// The two files are linked by their name, so no column is needed. Pure.
+pub fn model_image_path(file_path: &str) -> Option<String> {
+    let path = std::path::Path::new(file_path);
+    let name = path.file_name()?.to_str()?;
+    let bus = path.parent()?.file_name()?.to_str()?;
+    Some(format!("{PHOTOS_DIR}/{MODEL_IMAGE_DIR}/{bus}/{name}"))
+}
+
+/// The folder (inside `photos/`) of the pictures made by the model.
+pub const MODEL_IMAGE_DIR: &str = "model_image";
+
+/// Saves the picture of the model next to its photo's name. Written to a temporary file and renamed, so a display never
+/// reads half a file. A failure is logged and returned as false (the display then gets the camera photo).
+pub async fn save_model_image(file_path: &str, bytes: &[u8]) -> bool {
+    let Some(path) = model_image_path(file_path) else {
+        return false;
+    };
+    let temp = format!("{path}.tmp");
+    if save_file(&temp, bytes).await.is_err() {
+        return false;
+    }
+    match tokio::fs::rename(&temp, &path).await {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::error!("cannot save the model image {path}: {e}");
+            false
+        }
+    }
+}
+
 /// POST /buses/{bus_id}/frames: checks that the camera of this bus sent it, saves the JPEG to disk,
 /// keeps the facts in the table, and tells the camera when to take the next photo. The file is written
 /// first and the row second; if the row cannot be stored the file is removed again.
@@ -156,6 +187,10 @@ async fn delete_old_photos(db: &PgPool, bus_id: i32) {
     for path in &paths {
         if let Err(e) = tokio::fs::remove_file(path).await {
             tracing::warn!("cannot remove the old photo {path}: {e}");
+        }
+        // its model image goes with it (there may be none: the file is then simply not there)
+        if let Some(image) = model_image_path(path) {
+            let _ = tokio::fs::remove_file(image).await;
         }
     }
     tracing::info!(
